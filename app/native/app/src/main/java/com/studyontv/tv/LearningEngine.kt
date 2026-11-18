@@ -46,7 +46,7 @@ object TimePointsMath {
 
 class LearningEngine(
     private val store: LocalStore,
-    private val currentUsageDay: () -> Long = store::startOfToday
+    private val usageDayStart: () -> Long = store::startOfToday
 ) {
     companion object {
         private val SECRET_QUESTION_FIELDS = listOf("k", "answers", "correctIndices", "tip", "modelAnswer", "rubric")
@@ -89,6 +89,7 @@ class LearningEngine(
     private fun put(key: String, value: Long) = store.set(key, value.toString())
     private val time = TimePolicy(store) { bootCount() }
     private val videos = VideoLessons(store)
+    private var lastLoggedRollbackDay: Long? = null
 
     /** Cache publication must not turn a committed operation into a reported failure. */
     private fun publishNavigation() {
@@ -180,11 +181,17 @@ class LearningEngine(
     @Synchronized fun awake(awake: Boolean) { day(); time.awake(store.config(), awake); publishNavigation() }
 
     private fun day() {
-        val current = currentUsageDay()
-        val previous = store.get("usage_day").toLongOrNull()
+        val db = store.writableDatabase
+        // 结算在开启事务前确定用量日期，事务中的 status() 不能重新日切。
+        if (db.inTransaction()) return
+        val current = usageDayStart()
+        val previousUsageDay = store.get("usage_day").toLongOrNull()
         // 部分设备冷启动会先使用出厂日期，校时后才恢复。回拨时保留原来的用量日期和余额。
-        if (previous == null || current > previous) {
-            val db = store.writableDatabase
+        if (previousUsageDay != null && current < previousUsageDay && lastLoggedRollbackDay != previousUsageDay) {
+            lastLoggedRollbackDay = previousUsageDay
+            Diag.warn("Day", "检测到日期回拨，保留记账日和额度 previous=$previousUsageDay current=$current")
+        }
+        if (previousUsageDay == null || current > previousUsageDay) {
             db.beginTransaction()
             try {
                 if (pendingUsageMs > 0) store.logEvent("usage", JSONObject().put("milliseconds", pendingUsageMs))
@@ -381,11 +388,13 @@ class LearningEngine(
     @Synchronized
     fun status(): JSONObject {
         day()
+        val inTransaction = store.writableDatabase.inTransaction()
         val c = store.config()
         val supervision = c.optBoolean("supervisionEnabled", true)
         val remaining = usableCredit(c)
         val used = number("used_ms")
-        val rounds = store.roundsDoneToday()
+        val settledUsageDay = if (inTransaction) store.get("usage_day").toLongOrNull() else null
+        val rounds = if (settledUsageDay == null) store.roundsDoneToday() else store.roundsDoneToday(settledUsageDay)
         val o = if (supervision) override() else null
         val point = if (supervision) activeWindow(c) else null
         val limit = if (point?.mode == "counted") JSONObject(c.toString()).put("dailyMinutes", point.dailyMinutes) else c
@@ -423,7 +432,8 @@ class LearningEngine(
             .put("activePoint", point?.let { JSONObject().put("name", it.name).put("mode", it.mode).put("until", it.until) } ?: JSONObject.NULL)
             .put("canExit", canExit)
             .put("scheduleText", scheduleText(c))
-        if (!store.writableDatabase.inTransaction())
+        // A result computed inside a transaction must not expose an uncommitted reward/unlock.
+        if (!inTransaction)
             exitSnapshot = LearningExitSnapshot(canExit, android.os.SystemClock.elapsedRealtime())
         return result
     }
@@ -975,8 +985,9 @@ class LearningEngine(
             if (grant > 0) put("credit_ms", number("credit_ms") + grant)
             store.logEvent("quiz", JSONObject().put("native", true).put("video", true).put("total", 0).put("correct", 0).put("passed", true))
             if (supervision) store.logEvent("quiz_pass", JSONObject().put("roundId", id).put("minutes", grant / 60000.0).put("video", true))
+            val result = JSONObject().put("rewardMinutes", grant / 60000.0).put("status", status())
             db.setTransactionSuccessful()
-            return JSONObject().put("rewardMinutes", grant / 60000.0).put("status", status())
+            return result
         } finally { db.endTransaction(); publishNavigation() }
     }
 
@@ -1021,6 +1032,8 @@ class LearningEngine(
         require(store.childExists(reviewChild)) { "该题目所属的孩子档案已删除" }
         val settings = JSONObject(store.get("grading_settings", "{}"))
         val threshold = settings.optDouble("passScore", 60.0)
+        if (reviewChild != store.activeChild()) flushUsage()
+        store.withChild(reviewChild) { day() }
         val db = store.writableDatabase
         db.beginTransaction()
         try {

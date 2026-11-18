@@ -6,6 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
 import java.util.TimeZone
+import java.util.concurrent.TimeUnit
 
 object FeatureRegression {
     /** 单独跑隐藏桌面图标（-e launcher 1），改这块时不用等整套回归 */
@@ -17,6 +18,7 @@ object FeatureRegression {
         levelSelection(context)
         bootFreeInterval(context)
         dailyQuotaSurvivesClockRollback(context)
+        videoSettlementAcrossMidnight(context)
         val name = "feature-regression.db"
         context.deleteDatabase(name)
         val store = LocalStore(context, name)
@@ -727,7 +729,16 @@ object FeatureRegression {
         var store = LocalStore(context, name)
         try {
             val today = store.startOfToday()
+            val rollbackDay = today - TimeUnit.DAYS.toMillis(3650)
+            val tomorrow = today + TimeUnit.DAYS.toMillis(1)
             var day = today
+            fun usageEvents(): List<Long> {
+                return store.readableDatabase.rawQuery("SELECT payload FROM events WHERE type='usage' ORDER BY id", null).use { cursor ->
+                    buildList {
+                        while (cursor.moveToNext()) add(JSONObject(cursor.getString(0)).getLong("milliseconds"))
+                    }
+                }
+            }
             var engine = LearningEngine(store) { day }
             engine.saveConfig(JSONObject().put("dailyFreeMinutes", 30).put("bootFreeMinutes", 0)
                 .put("dailyMinutes", 120))
@@ -740,7 +751,7 @@ object FeatureRegression {
 
             store.close()
             store = LocalStore(context, name)
-            day = 1_420_041_600_000L // N1 冷启动时的 2015-01-01 00:00（上海时区）
+            day = rollbackDay
             engine = LearningEngine(store) { day }
             engine.awake(true)
             val beforeSync = engine.status()
@@ -755,12 +766,74 @@ object FeatureRegression {
             check(afterSync.getLong("freeQuotaSeconds") == 0L)
             check(afterSync.getDouble("usedMinutes") == 30.0)
 
-            day = today + 86_400_000L
+            engine.remote("credit", 5, "test")
+            day = rollbackDay
+            val adjusted = engine.status()
+            check(adjusted.getLong("remainingSeconds") == 300L)
+            check(adjusted.getDouble("todayLimitMinutes") == 125.0)
+            check(store.get("credit_ms") == "300000" && store.get("cap_adjust_ms") == "300000")
+            day = today
+            engine.consume(5000)
+            val recorded = usageEvents()
+            check(recorded == listOf(5000L)) { "不足 30 秒的尾段应仍在内存中" }
+
+            day = tomorrow
+            val db = store.writableDatabase
+            db.beginTransaction()
+            try {
+                val activeDay = engine.status()
+                check(activeDay.getLong("remainingSeconds") == 295L)
+                check(store.get("usage_day") == today.toString())
+                check(usageEvents() == recorded) { "事务中查询状态不能写出尾段用量" }
+            } finally {
+                db.endTransaction()
+            }
+
             val nextDay = engine.status()
             check(nextDay.getLong("freeQuotaSeconds") == 1800L)
             check(nextDay.getDouble("usedMinutes") == 0.0)
+            check(store.get("credit_ms") == "0" && store.get("cap_adjust_ms") == "0")
             engine.consume(5000)
             check(engine.status().getLong("freeQuotaSeconds") == 1795L)
+            check(usageEvents() == recorded + 5000L) { "日切时尾段用量应写入且只写入一次" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    private fun videoSettlementAcrossMidnight(context: Context) {
+        val name = "midnight-video-settlement.db"
+        context.deleteDatabase(name)
+        val store = LocalStore(context, name)
+        try {
+            val today = store.startOfToday()
+            val tomorrow = today + TimeUnit.DAYS.toMillis(1)
+            var day = today
+            var advanceAfterSample = false
+            val engine = LearningEngine(store) {
+                val sampled = day
+                if (advanceAfterSample) {
+                    day = tomorrow
+                    advanceAfterSample = false
+                }
+                sampled
+            }
+            engine.saveConfig(JSONObject().put("learningContent", "video").put("videoMinutes", 1)
+                .put("sessionMinutes", 10).put("educationalVideos", JSONArray().put("https://example.test/video.mp4")))
+            val lessonId = engine.start().getJSONObject("videoLesson").getString("id")
+            val lesson = JSONObject(store.get("video_lesson"))
+            store.set("video_lesson", lesson.put("watchedMs", lesson.getLong("requiredMs")).toString())
+
+            advanceAfterSample = true
+            val settled = engine.completeVideo(lessonId)
+            check(settled.getDouble("rewardMinutes") == 10.0)
+            check(settled.getJSONObject("status").getLong("remainingSeconds") == 600L) { "结算响应沿用事务开始时的记账日" }
+            check(store.roundsDoneToday(today) == 1)
+            check(engine.status().getLong("remainingSeconds") == 0L)
+            check(store.get("usage_day") == tomorrow.toString())
+            check(runCatching { engine.completeVideo(lessonId) }.exceptionOrNull() is IllegalArgumentException)
+            check(store.roundsDoneToday(today) == 1) { "跨午夜结算只能发放一次" }
         } finally {
             store.close()
             context.deleteDatabase(name)

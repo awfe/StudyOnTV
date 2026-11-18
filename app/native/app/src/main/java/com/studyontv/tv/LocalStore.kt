@@ -2182,9 +2182,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     }
 
     fun todayStats(): JSONObject = stats(startOfToday(), Long.MAX_VALUE)
-
-    fun roundsDoneToday(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM events WHERE type='quiz_pass' AND ts>=? AND child=?",
-        arrayOf(startOfToday().toString(), activeChild())).use {
+    // status() 每秒都会调用，这里直接计数，不再解析今天的全部事件
+    fun roundsDoneToday(dayStart: Long = startOfToday()): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM events WHERE type='quiz_pass' AND ts>=? AND child=?",
+        arrayOf(dayStart.toString(), activeChild())).use {
         if (it.moveToFirst()) it.getInt(0) else 0
     }
 
