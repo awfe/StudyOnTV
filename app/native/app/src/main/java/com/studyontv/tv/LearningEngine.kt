@@ -44,7 +44,10 @@ object TimePointsMath {
     }
 }
 
-class LearningEngine(private val store: LocalStore) {
+class LearningEngine(
+    private val store: LocalStore,
+    private val currentUsageDay: () -> Long = store::startOfToday
+) {
     companion object {
         private val SECRET_QUESTION_FIELDS = listOf("k", "answers", "correctIndices", "tip", "modelAnswer", "rubric")
 
@@ -177,19 +180,31 @@ class LearningEngine(private val store: LocalStore) {
     @Synchronized fun awake(awake: Boolean) { day(); time.awake(store.config(), awake); publishNavigation() }
 
     private fun day() {
-        val current = store.startOfToday()
-        if (number("usage_day") != current) {
-            if (pendingUsageMs > 0) { store.logEvent("usage", JSONObject().put("milliseconds", pendingUsageMs)); pendingUsageMs = 0 }
-            put("usage_day", current)
-            put("credit_ms", 0)
-            put("used_ms", 0)
-            put("cap_adjust_ms", 0)
-            store.set("video_lesson", "")
-            if (time.left("rest_deadline") == 0L) put("rest_watched_ms", 0)
-            val freeMin = store.config().optLong("dailyFreeMinutes", 0L)
-            put("free_quota_ms", freeMin * 60000L)
-            put("free_used_ms", 0)
+        val current = currentUsageDay()
+        val previous = store.get("usage_day").toLongOrNull()
+        // 部分设备冷启动会先使用出厂日期，校时后才恢复。回拨时保留原来的用量日期和余额。
+        if (previous == null || current > previous) {
+            val db = store.writableDatabase
+            db.beginTransaction()
+            try {
+                if (pendingUsageMs > 0) store.logEvent("usage", JSONObject().put("milliseconds", pendingUsageMs))
+                put("usage_day", current)
+                put("credit_ms", 0)
+                put("used_ms", 0)
+                put("cap_adjust_ms", 0)
+                store.set("video_lesson", "")
+                if (time.left("rest_deadline") == 0L) put("rest_watched_ms", 0)
+                val freeMin = store.config().optLong("dailyFreeMinutes", 0L)
+                put("free_quota_ms", freeMin * 60000L)
+                put("free_used_ms", 0)
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            pendingUsageMs = 0
         } else if (store.get("free_used_ms").isEmpty()) {
+            // 旧版本升级：没有 free_used_ms，用当天已用时长估算已消耗的免费额度。
+            // 免费额度总是先于奖励余额扣除，所以这个估算不会把奖励时间算成免费时间。
             val daily = store.config().optLong("dailyFreeMinutes", 0L) * 60000L
             put("free_used_ms", min(number("used_ms"), daily).coerceAtLeast(0))
         }

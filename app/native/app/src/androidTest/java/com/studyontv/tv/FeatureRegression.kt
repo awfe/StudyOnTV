@@ -16,6 +16,7 @@ object FeatureRegression {
         childMigration(context)
         levelSelection(context)
         bootFreeInterval(context)
+        dailyQuotaSurvivesClockRollback(context)
         val name = "feature-regression.db"
         context.deleteDatabase(name)
         val store = LocalStore(context, name)
@@ -714,6 +715,52 @@ object FeatureRegression {
             time.awake(store.config(), false)
             time.awake(store.config(), true)
             check(engine.status().getLong("bootFreeSeconds") == 1800L) { "间隔为 0 时保持每次唤醒发放" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    private fun dailyQuotaSurvivesClockRollback(context: Context) {
+        val name = "daily-quota-clock-regression.db"
+        context.deleteDatabase(name)
+        var store = LocalStore(context, name)
+        try {
+            val today = store.startOfToday()
+            var day = today
+            var engine = LearningEngine(store) { day }
+            engine.saveConfig(JSONObject().put("dailyFreeMinutes", 30).put("bootFreeMinutes", 0)
+                .put("dailyMinutes", 120))
+            val used = (30 * 60_000L - 5000).toString()
+            store.set("free_quota_ms", "5000")
+            store.set("free_used_ms", used)
+            store.set("used_ms", used)
+            engine.consume(5000)
+            check(engine.status().getString("reason") == "timeup")
+
+            store.close()
+            store = LocalStore(context, name)
+            day = 1_420_041_600_000L // N1 冷启动时的 2015-01-01 00:00（上海时区）
+            engine = LearningEngine(store) { day }
+            engine.awake(true)
+            val beforeSync = engine.status()
+            check(beforeSync.getString("reason") == "timeup")
+            check(beforeSync.getLong("freeQuotaSeconds") == 0L)
+            check(beforeSync.getDouble("usedMinutes") == 30.0)
+            check(store.get("usage_day") == today.toString())
+
+            day = today
+            val afterSync = engine.status()
+            check(afterSync.getString("reason") == "timeup")
+            check(afterSync.getLong("freeQuotaSeconds") == 0L)
+            check(afterSync.getDouble("usedMinutes") == 30.0)
+
+            day = today + 86_400_000L
+            val nextDay = engine.status()
+            check(nextDay.getLong("freeQuotaSeconds") == 1800L)
+            check(nextDay.getDouble("usedMinutes") == 0.0)
+            engine.consume(5000)
+            check(engine.status().getLong("freeQuotaSeconds") == 1795L)
         } finally {
             store.close()
             context.deleteDatabase(name)
