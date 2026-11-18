@@ -706,7 +706,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             .put("praisePhrases", JSONArray(DEFAULT_PRAISE)).put("encouragePhrases", JSONArray(DEFAULT_ENCOURAGE))
             .put("autoNextSeconds", 0).put("scheduleMode", "allow").put("blockSettingsDuringControl", true).put("theme", if (BuildConfig.FLAVOR == "tv") "dark" else "system")
             .put("holidayMode", "sunday")
-            .put("bootFreeMinutes", 0).put("dailyLimitEnabled", true).put("roundsLimitEnabled", true)
+            .put("bootFreeMinutes", 0).put("bootFreeIntervalMinutes", 0)
+            .put("dailyLimitEnabled", true).put("roundsLimitEnabled", true)
             .put("restEnabled", false).put("restWatchMinutes", 40).put("restMinutes", 10)
             .put("wrongReviewSeconds", 0).put("fontScale", 100).put("childSelectLevel", false)
             .put("trafficAssistEnabled", false).put("backgroundAnchorEnabled", true)
@@ -822,7 +823,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         val ranges = mapOf("dailyMinutes" to 1..480, "dailyFreeMinutes" to 0..120, "sessionMinutes" to 1..120,
             "questionsPerRound" to 1..100, "roundsPerDay" to 1..100,
             "wrongThreshold" to 1..100, "extraQuestions" to 1..100,
-            "bootFreeMinutes" to 0..120, "restWatchMinutes" to 1..480, "restMinutes" to 1..120,
+            "bootFreeMinutes" to 0..120, "bootFreeIntervalMinutes" to 0..1440,
+            "restWatchMinutes" to 1..480, "restMinutes" to 1..120,
             "wrongReviewSeconds" to 0..300, "fontScale" to 75..200, "videoMinutes" to 1..30)
         ranges.forEach { (key, range) ->
             if (input.has(key)) {

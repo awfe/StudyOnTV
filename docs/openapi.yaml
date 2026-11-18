@@ -2523,6 +2523,12 @@ components:
           minimum: 0
           maximum: 120
           default: 0
+        bootFreeIntervalMinutes:
+          type: integer
+          minimum: 0
+          maximum: 1440
+          default: 0
+          description: 两次发放开机或唤醒免费时长的最短间隔（分钟）。0 为不限。
         dailyLimitEnabled:
           type: boolean
           default: true

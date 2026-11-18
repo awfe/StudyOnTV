@@ -15,6 +15,7 @@ object FeatureRegression {
         migration(context)
         childMigration(context)
         levelSelection(context)
+        bootFreeInterval(context)
         val name = "feature-regression.db"
         context.deleteDatabase(name)
         val store = LocalStore(context, name)
@@ -648,6 +649,77 @@ object FeatureRegression {
     }
     private fun answer(round: JSONObject, selection: Int) = JSONObject().put("roundId", round.getString("id"))
         .put("nonce", round.getString("nonce")).put("selections", JSONArray().put(selection))
+    private fun bootFreeInterval(context: Context) {
+        val name = "boot-free-interval-regression.db"
+        context.deleteDatabase(name)
+        var store = LocalStore(context, name)
+        try {
+            val minute = 60_000L
+            var bootId = 1
+            var elapsed = 20 * minute
+            val firstGrantAt = System.currentTimeMillis()
+            var wall = firstGrantAt
+            fun policy() = TimePolicy(store, { elapsed }, { wall }) { bootId }
+
+            var engine = LearningEngine(store)
+            check(store.config().getInt("bootFreeIntervalMinutes") == 0)
+            engine.saveConfig(JSONObject().put("bootFreeMinutes", 30).put("bootFreeIntervalMinutes", 120)
+                .put("dailyMinutes", 90))
+            check(runCatching {
+                engine.saveConfig(JSONObject().put("bootFreeIntervalMinutes", 1441))
+            }.exceptionOrNull() is IllegalArgumentException)
+            var time = policy()
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1800L)
+            engine.consume(5000)
+
+            elapsed += minute
+            wall += 180 * minute
+            time.awake(store.config(), false)
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1795L) { "同次开机改系统时间不能提前发放" }
+
+            store.close()
+            store = LocalStore(context, name)
+            engine = LearningEngine(store)
+            time = policy()
+            bootId++
+            elapsed = 5000
+            wall = firstGrantAt + 30 * minute
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1795L) { "冷启动后必须保留原余额" }
+            repeat(359) { engine.consume(5000) }
+            check(engine.status().getString("reason") == "timeup")
+            check(engine.status().getDouble("usedMinutes") == 30.0)
+
+            bootId++
+            wall = firstGrantAt - minute
+            time.awake(store.config(), true)
+            check(engine.status().getString("reason") == "timeup") { "重启后日期回拨不能重新发放" }
+            wall = firstGrantAt + 120 * minute - 1
+            time.awake(store.config(), false)
+            time.awake(store.config(), true)
+            check(engine.status().getString("reason") == "timeup") { "间隔到期前不能发放" }
+
+            wall++
+            policy().awake(store.config(), true)
+            check(engine.status().getString("reason") == "timeup") { "间隔到期后重开服务不能自动发放" }
+            time.awake(store.config(), false)
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1800L) { "间隔到期后下次唤醒才发放" }
+            check(engine.status().getDouble("usedMinutes") == 30.0)
+
+            engine.saveConfig(JSONObject().put("bootFreeIntervalMinutes", 0))
+            engine.consume(5000)
+            time.awake(store.config(), false)
+            time.awake(store.config(), true)
+            check(engine.status().getLong("bootFreeSeconds") == 1800L) { "间隔为 0 时保持每次唤醒发放" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
     private fun expire(store: LocalStore, key: String) {
         store.set(key, JSONObject().put("boot", -1).put("atElapsed", 0).put("untilElapsed", SystemClock.elapsedRealtime() - 1).put("until", 0).toString())
     }
