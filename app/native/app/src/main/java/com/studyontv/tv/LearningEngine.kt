@@ -127,7 +127,7 @@ class LearningEngine(
         )
     }
 
-    /** 测试可以固定时钟（例如验证跨午夜窗口）；生产环境始终是系统时间。 */
+    /** 测试可以固定时钟（例如验证跨午夜窗口）；生产环境统一由 DeviceClock 取时。 */
     internal var now: () -> Calendar = { DeviceClock.calendar(store) }
 
     /** 一个命中的网课时段或大人豁免窗口。 */
@@ -1018,7 +1018,7 @@ class LearningEngine(
         val id = round.optString("pendingReview")
         if (id.isEmpty()) return JSONObject().put("pending", false).put("status", status())
         store.review(id)?.let {
-            it.put("state", "skipped").put("feedback", "孩子选择先跳过，等待家长处理").put("skippedAt", System.currentTimeMillis())
+            it.put("state", "skipped").put("feedback", "孩子选择先跳过，等待家长处理").put("skippedAt", store.clockReading().millis)
             store.saveReview(it)
         }
         round.remove("pendingReview")
@@ -1050,7 +1050,7 @@ class LearningEngine(
                 val result = answer(review.getJSONObject("input"), score >= threshold, quality)
                 require(!result.has("error") && !result.has("blocked")) { "当前任务暂不可结算，请在可用时段重试" }
                 review.put("state", "graded").put("score", score).put("feedback", feedback.take(5000))
-                    .put("source", source).put("gradedAt", System.currentTimeMillis()).put("result", result)
+                    .put("source", source).put("gradedAt", store.clockReading().millis).put("result", result)
                 store.saveReview(review)
                 store.set("review_feedback", reviewId)
                 store.logEvent("review_graded", JSONObject().put("id", reviewId).put("score", score).put("source", source))
@@ -1111,7 +1111,7 @@ class LearningEngine(
                 if (savedDrawing.isEmpty()) remove("drawing") else put("drawing", savedDrawing)
             }
             val id = UUID.randomUUID().toString()
-            val review = JSONObject().put("id", id).put("state", "pending").put("ts", System.currentTimeMillis())
+            val review = JSONObject().put("id", id).put("state", "pending").put("ts", store.clockReading().millis)
                 .put("child", store.activeChild())
                 .put("question", question).put("input", cleanInput).put("feedback", "等待批改")
             val db = store.writableDatabase

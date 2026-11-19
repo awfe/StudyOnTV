@@ -1,6 +1,7 @@
 package com.studyontv.tv
 
 import android.content.Context
+import android.os.Build
 import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
@@ -17,6 +18,7 @@ object FeatureRegression {
         childMigration(context)
         levelSelection(context)
         bootFreeInterval(context)
+        businessClock(context)
         dailyQuotaSurvivesClockRollback(context)
         videoSettlementAcrossMidnight(context)
         val name = "feature-regression.db"
@@ -609,10 +611,10 @@ object FeatureRegression {
             // 引擎和「今天」的起点都跟着配置的时区走
             val newYork = TimeZone.getTimeZone("America/New_York")
             val offset = (engine.now().get(Calendar.ZONE_OFFSET) + engine.now().get(Calendar.DST_OFFSET)) / 3600000
-            check(offset == newYork.getOffset(System.currentTimeMillis()) / 3600000) { "引擎应使用配置的时区" }
+            check(offset == newYork.getOffset(store.clockReading().millis) / 3600000) { "引擎应使用配置的时区" }
             val day = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").apply { timeZone = newYork }
             val start = day.format(java.util.Date(store.startOfToday()))
-            check(start.endsWith("00:00") && start == day.format(java.util.Date(System.currentTimeMillis())).take(10) + " 00:00") { "「今天」的起点按配置时区算: $start" }
+            check(start.endsWith("00:00") && start == day.format(java.util.Date(store.clockReading().millis)).take(10) + " 00:00") { "「今天」的起点按配置时区算: $start" }
 
             // 同一个时刻：上海 09:10、纽约前一天 20:10，窗口只开 09:00–10:00
             val instant = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai")).apply {
@@ -717,6 +719,64 @@ object FeatureRegression {
             time.awake(store.config(), false)
             time.awake(store.config(), true)
             check(engine.status().getLong("bootFreeSeconds") == 1800L) { "间隔为 0 时保持每次唤醒发放" }
+        } finally {
+            store.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    private fun businessClock(context: Context) {
+        fun at(day: Int, hour: Int, minute: Int = 0): Long =
+            Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai")).apply {
+                clear()
+                set(2030, Calendar.JANUARY, day, hour, minute)
+            }.timeInMillis
+
+        val wall = at(6, 20)
+        val networkTime = at(7, 9, 10)
+        val legacy = DeviceClock.read(Build.VERSION_CODES.S_V2, { error("旧系统不能调用网络时钟") }, { wall })
+        check(legacy == DeviceClock.Reading(wall, DeviceClock.Source.SYSTEM))
+        val preferred = DeviceClock.read(Build.VERSION_CODES.TIRAMISU, { networkTime }, { error("有网络时间时不能回退") })
+        check(preferred == DeviceClock.Reading(networkTime, DeviceClock.Source.NETWORK))
+
+        var network: Long? = null
+        val name = "business-clock-regression.db"
+        context.deleteDatabase(name)
+        val store = LocalStore(context, name) {
+            DeviceClock.read(Build.VERSION_CODES.TIRAMISU, { network }, { wall })
+        }
+        try {
+            val engine = LearningEngine(store)
+            val slots = JSONArray(List(7) { "0".repeat(18) + "11" + "0".repeat(28) })
+            engine.saveConfig(JSONObject().put("timezone", "Asia/Shanghai").put("holidayMode", "normal")
+                .put("dailyFreeMinutes", 30).put("allDay", false).put("weekSlots", slots))
+            check(store.clockReading() == legacy && store.startOfToday() == at(6, 0))
+            check(engine.status().getString("reason") == "schedule")
+            store.set("used_ms", "1800000")
+            store.set("free_quota_ms", "0")
+            store.set("free_used_ms", "1800000")
+
+            network = at(7, 11)
+            val rollover = engine.status()
+            check(store.startOfToday() == at(7, 0) && store.get("usage_day") == at(7, 0).toString())
+            check(rollover.getLong("freeQuotaSeconds") == 1800L && rollover.getDouble("usedMinutes") == 0.0)
+            check(rollover.getString("reason") == "schedule" && rollover.getLong("nextAvailableAt") == at(8, 9))
+
+            network = networkTime
+            check(engine.status().getBoolean("canExit"))
+            store.logEvent("quiz_pass", JSONObject())
+            check(store.recentEvents(1).getJSONObject(0).getLong("ts") == networkTime)
+            check(store.roundsDoneToday() == 1 && store.todayStats().getInt("rounds") == 1)
+            val history = store.historyDays(2)
+            check(history.getJSONObject(0).getInt("rounds") == 1)
+            check(history.getJSONObject(1).getInt("rounds") == 0)
+            engine.consume(5000)
+
+            network = null
+            engine.status()
+            check(store.get("usage_day") == at(7, 0).toString()) { "回退到旧的系统日期时要保留已记账日期" }
+            network = networkTime
+            check(engine.status().getLong("freeQuotaSeconds") == 1795L)
         } finally {
             store.close()
             context.deleteDatabase(name)

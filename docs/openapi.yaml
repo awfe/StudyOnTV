@@ -3799,6 +3799,10 @@ components:
         deviceTime:
           type: string
           description: 设备当前时间（Java Date.toString() 格式）
+        clockSource:
+          type: string
+          enum: [network, system]
+          description: 业务时间来源。Android 13 及以上优先使用可用的网络时钟，其余情况使用系统时间。
         keepalive:
           $ref: '#/components/schemas/KeepAliveInfo'
         buglyConsent:
