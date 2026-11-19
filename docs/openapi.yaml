@@ -1677,6 +1677,9 @@ paths:
                 level:
                   type: string
                   description: 孩子选择年级模式下选定的年级
+                fromGate:
+                  type: boolean
+                  description: 拦截页自动发起请求时，可用免费时长已恢复则返回 watching。
       responses:
         '200':
           description: 本轮题目或状态分支

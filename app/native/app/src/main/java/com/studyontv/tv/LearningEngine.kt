@@ -418,7 +418,8 @@ class LearningEngine(
         }
         val nextAt = if (reason == "locked") o?.optLong("until") ?: 0L
             else if (reason in listOf("quota", "rounds", "schedule")) nextAvailable(c, reason != "schedule") else 0L
-        val canExit = !supervision || (reason.isEmpty() && (remaining / 1000 > 0 || free))
+        // 每日免费、开机免费和奖励额度都可以放行返回键和 Home 键。
+        val canExit = !supervision || (reason.isEmpty() && (remaining / 1000 > 0 || freeQuota / 1000 > 0 || free))
         val result = JSONObject().put("remainingSeconds", remaining / 1000).put("usedMinutes", used / 60000.0)
             .put("supervisionEnabled", supervision)
             .put("quizGeneration", number("quiz_generation"))
@@ -727,8 +728,11 @@ class LearningEngine(
     }
 
     @Synchronized
-    fun start(level: String? = null): JSONObject =
-        start(JSONObject().apply { if (level != null) put("level", level) })
+    fun start(level: String? = null, fromGate: Boolean = false): JSONObject =
+        start(JSONObject().apply {
+            if (level != null) put("level", level)
+            if (fromGate) put("fromGate", true)
+        })
 
     @Synchronized
     fun start(options: JSONObject): JSONObject {
@@ -763,9 +767,11 @@ class LearningEngine(
         if (supervision && !explicitStudy && st.optBoolean("free") && c.getString("playMode") != "practice") {
             return JSONObject().put("free", true).put("status", st).put("study", store.studySummary())
         }
+        val watchingWithFreeQuota = options.optBoolean("fromGate") && st.getString("reason").isEmpty() &&
+            st.optLong("freeQuotaSeconds") > 0 && c.getString("playMode") != "practice"
         var round = active()
         healPendingReview(round)
-        if (!explicitStudy && round == null && supervision && videos.wanted(c)) {
+        if (!explicitStudy && round == null && supervision && !watchingWithFreeQuota && videos.wanted(c)) {
             return JSONObject().put("videoLesson", videos.start(c)).put("status", st)
         }
         val feedbackId = store.get("review_feedback")
@@ -776,7 +782,8 @@ class LearningEngine(
         if (supervision && !explicitStudy && c.getString("playMode") != "practice" && st.getString("reason") in listOf("quota", "rounds", "schedule")) {
             return JSONObject().put("blocked", st.getString("reason")).put("status", st)
         }
-        if (supervision && !explicitStudy && st.optLong("remainingSeconds") > 0 && c.getString("playMode") != "practice") {
+        if (supervision && !explicitStudy && (watchingWithFreeQuota || st.optLong("remainingSeconds") > 0) &&
+            c.getString("playMode") != "practice") {
             return JSONObject().put("watching", true).put("status", st).put("study", store.studySummary())
         }
         if (round?.has("pendingReview") == true) {

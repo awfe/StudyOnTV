@@ -765,6 +765,7 @@ object FeatureRegression {
             check(afterSync.getString("reason") == "timeup")
             check(afterSync.getLong("freeQuotaSeconds") == 0L)
             check(afterSync.getDouble("usedMinutes") == 30.0)
+            check(!afterSync.getBoolean("canExit"))
 
             engine.remote("credit", 5, "test")
             day = rollbackDay
@@ -792,6 +793,8 @@ object FeatureRegression {
             val nextDay = engine.status()
             check(nextDay.getLong("freeQuotaSeconds") == 1800L)
             check(nextDay.getDouble("usedMinutes") == 0.0)
+            check(nextDay.getBoolean("canExit") && engine.exitSnapshot.canExit)
+            check(engine.start(fromGate = true).getBoolean("watching")) { "免费额度到账后，仍打开的拦截页不能重新出题" }
             check(store.get("credit_ms") == "0" && store.get("cap_adjust_ms") == "0")
             engine.consume(5000)
             check(engine.status().getLong("freeQuotaSeconds") == 1795L)
