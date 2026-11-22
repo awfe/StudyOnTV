@@ -58,12 +58,12 @@
     if (window.SOTV_PLAIN) return window.SOTV_PLAIN(text);
     return String(text == null ? '' : text).replace(/\$\$?/g, '').trim();
   }
-  // 听力题：listen 只交给朗读，屏幕上不显示；listenTimes 限制本组最多播几次（默认 2 次）
+  // 听力题：listen 只交给朗读，屏幕上不显示；listenTimes 限制本组最多播几次（默认 5 次）
   var listenUsed = {};
   function listenKey(item) { return String((item && (item.id || item.q)) || ''); }
   function listenCap(item) {
     var cap = Number(item && item.listenTimes);
-    return cap >= 1 && cap <= 5 ? Math.floor(cap) : 2;
+    return cap >= 1 && cap <= 5 ? Math.floor(cap) : 5;
   }
   function listenLeft(item) { return Math.max(0, listenCap(item) - (listenUsed[listenKey(item)] || 0)); }
   // 没有原生桥（电脑浏览器打开家长面板同款页面）时用 Web Speech API 兜底

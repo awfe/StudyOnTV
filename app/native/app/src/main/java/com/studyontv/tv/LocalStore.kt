@@ -1719,7 +1719,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         if (listen.isEmpty()) {
             details.remove("listenTimes"); details.remove("listenRequired"); details.remove("listenRate")
         } else {
-            details.put("listenTimes", item.optInt("listenTimes", 2).coerceIn(1, 5))
+            details.put("listenTimes", item.optInt("listenTimes", 5).coerceIn(1, 5))
             details.put("listenRequired", item.optBoolean("listenRequired", false))
             val listenRate = item.optDouble("listenRate", -1.0)
             if (listenRate.isFinite() && listenRate in 0.7..1.5) details.put("listenRate", listenRate) else details.remove("listenRate")

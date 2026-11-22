@@ -167,7 +167,7 @@ export default function QuestionFormDialog({ initial, meta, onClose, onSaved }: 
     if (q.listen && q.audio) return toast.error('听力文本和音频地址只能二选一');
     if (q.listen.length > 1000) return toast.error('听力文本不能超过 1000 字');
     if (q.listen) {
-      q.listenTimes = Math.min(5, Math.max(1, Number(f.listenTimes) || 2));
+      q.listenTimes = Math.min(5, Math.max(1, Number(f.listenTimes) || 5));
       q.listenRequired = !!f.listenRequired;
       const listenRate = Number(f.listenRate);
       if (listenRate >= 0.7 && listenRate <= 1.5) q.listenRate = listenRate;
@@ -474,9 +474,9 @@ export default function QuestionFormDialog({ initial, meta, onClose, onSaved }: 
                   <Field label="允许播放次数">
                     <ChoiceSelect
                       label="允许播放次数"
-                      value={String(form.listenTimes || '2')}
+                      value={String(form.listenTimes || '5')}
                       onChange={v => field('listenTimes', v)}
-                      options={[['1', '1 次'], ['2', '2 次'], ['3', '3 次'], ['4', '4 次'], ['5', '5 次']]}
+                      options={[['1', '1 次'], ['2', '2 次'], ['3', '3 次'], ['4', '4 次'], ['5', '5 次（默认）']]}
                     />
                   </Field>
                   <Field label="作答前必须播放">
