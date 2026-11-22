@@ -388,6 +388,8 @@ class GateOverlay(
         }
         @JavascriptInterface fun readAloud(text: String) = SpeechReader.read(context, text, "", ::speechNotice)
         @JavascriptInterface fun readInLanguage(text: String, language: String) = SpeechReader.read(context, text, language, ::speechNotice)
+        /** 听力题：按题指定语速朗读（listenRate），rate 传 -1 表示跟随全局语速 */
+        @JavascriptInterface fun readWithRate(text: String, language: String, rate: Double) = SpeechReader.read(context, text, language, ::speechNotice, rate)
         @JavascriptInterface fun stopReading() = SpeechReader.stop()
         @JavascriptInterface fun playAudio(url: String) = SpeechReader.playAudio(context, url, ::speechNotice)
         /** 最近一次朗读 / 音频播放的结果（失败时 reason/message/degraded 有值，#87 不再静默） */

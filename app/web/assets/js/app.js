@@ -30,7 +30,7 @@
       }));
     } catch (e) {}
   }
-  function clearRound() { try { window.localStorage.removeItem(ROUND_KEY); } catch (e) {} }
+  function clearRound() { listenUsed = {}; try { window.localStorage.removeItem(ROUND_KEY); } catch (e) {} }
   function savedRound() {
     try {
       var saved = JSON.parse(window.localStorage.getItem(ROUND_KEY) || 'null');
@@ -46,6 +46,7 @@
   }
   function canVoice() { return !!(window.SOTVNative && typeof window.SOTVNative.answerVoice === 'function'); }
   function canRead() { return !!(window.SOTVNative && typeof window.SOTVNative.readInLanguage === 'function'); }
+  function canReadRate() { return !!(window.SOTVNative && typeof window.SOTVNative.readWithRate === 'function'); }
   function isPureStudyMode() { return state.config && state.config.supervisionEnabled === false; }
   function isHubAvailable() { return isPureStudyMode() || !!(state.learning && state.learning.free); }
   // 可用时段文案由设备按周计划算好（state.learning.scheduleText），页面不再自己拼旧版的 windowStart/windowEnd
@@ -56,6 +57,41 @@
   function speakable(text) {
     if (window.SOTV_PLAIN) return window.SOTV_PLAIN(text);
     return String(text == null ? '' : text).replace(/\$\$?/g, '').trim();
+  }
+  // 听力题：listen 只交给朗读，屏幕上不显示；listenTimes 限制本组最多播几次（默认 2 次）
+  var listenUsed = {};
+  function listenKey(item) { return String((item && (item.id || item.q)) || ''); }
+  function listenCap(item) {
+    var cap = Number(item && item.listenTimes);
+    return cap >= 1 && cap <= 5 ? Math.floor(cap) : 2;
+  }
+  function listenLeft(item) { return Math.max(0, listenCap(item) - (listenUsed[listenKey(item)] || 0)); }
+  // 没有原生桥（电脑浏览器打开家长面板同款页面）时用 Web Speech API 兜底
+  function webSpeak(text, lang) {
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+    var utterance = new window.SpeechSynthesisUtterance(String(text || ''));
+    utterance.lang = lang || 'en-US';
+    try { window.speechSynthesis.cancel(); window.speechSynthesis.speak(utterance); } catch (e) {}
+  }
+  function playListen(item) {
+    if (!item || !item.listen || listenLeft(item) <= 0) return false;
+    listenUsed[listenKey(item)] = (listenUsed[listenKey(item)] || 0) + 1;
+    var lang = item.language || 'en-US';
+    var rate = Number(item.listenRate);
+    if (canReadRate() && rate >= 0.7 && rate <= 1.5) nativeCall('readWithRate', [item.listen, lang, rate]);
+    else if (canRead()) nativeCall('readInLanguage', [item.listen, lang]);
+    else webSpeak(item.listen, lang);
+    refreshListenBtn(item);
+    return true;
+  }
+  // 只改按钮文案，不重渲染整页：重渲染会再触发一次自动朗读
+  function refreshListenBtn(item) {
+    var button = $('listenBtn');
+    if (!button || !item) return;
+    var left = listenLeft(item);
+    button.textContent = left > 0 ? '▶ 播放听力（还可播 ' + left + ' 次）' : '听力已播放完';
+    button.disabled = left <= 0;
+    button.classList.toggle('answered', left <= 0);
   }
   function formatOptionAnswer(item, i) {
     var raw = (item && item.a ? item.a : [])[i];
@@ -409,7 +445,8 @@
     $('qText').className = 'question' + (qLength > 120 ? ' longer' : qLength > 56 ? ' long' : '');
     renderMedia(card);
     if (!state.cardRevealed) {
-      if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [speakable(card.q), card.language || '']);
+      if (card.listen && state.speech && state.speech.autoRead) playListen(card);
+      else if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [speakable(card.q), card.language || '']);
       else nativeCall('stopReading');
     }
 
@@ -602,7 +639,11 @@
     $('qDots').textContent = round.mode === 'streak' ? '连续答对 ' + round.streak + ' 题' : '';
     var qLength = speakable(item.q).length;
     $('qText').className = 'question' + (qLength > 120 ? ' longer' : qLength > 56 ? ' long' : '');
-    if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [readText(item), item.language || '']);
+    if (item.listen) {
+      // 听力题只播听力文本：题干和选项一律不进 TTS，否则选项被念出来等于给答案
+      if (state.speech && state.speech.autoRead) playListen(item);
+      else nativeCall('stopReading');
+    } else if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [readText(item), item.language || '']);
     else nativeCall('stopReading');
     renderMedia(item);
     var options = $('qOptions'); options.innerHTML = '';
@@ -720,6 +761,18 @@
       if (window.SOTVNative) { var play = document.createElement('button'); play.className = 'btn btn-ghost focusable'; play.setAttribute('data-action', 'play-audio'); play.textContent = '播放题目音频'; box.appendChild(play); }
       else { var audio = document.createElement('audio'); audio.src = item.audio; audio.controls = true; audio.className = 'focusable'; audio.preload = 'none'; box.appendChild(audio); }
     }
+    // 听力题：不摆音频文件，点按钮让设备朗读 listen（listenTimes 次为上限）
+    if (item.listen && !item.audio) {
+      var left = listenLeft(item);
+      var listenBtn = document.createElement('button');
+      listenBtn.id = 'listenBtn'; listenBtn.className = 'btn btn-ghost focusable';
+      listenBtn.textContent = left > 0 ? '▶ 播放听力（还可播 ' + left + ' 次）' : '听力已播放完';
+      listenBtn.disabled = left <= 0;
+      if (left <= 0) listenBtn.classList.add('answered');
+      if (window.SOTVNative) listenBtn.setAttribute('data-action', 'play-listen');
+      else listenBtn.onclick = function () { playListen(item); };
+      box.appendChild(listenBtn);
+    }
   }
   function addSubmit(parent, value) {
     var button = document.createElement('button'); button.className = 'btn btn-primary focusable answer-submit';
@@ -740,6 +793,8 @@
   function submit() {
     if (state.busy || !state.round || questionInputBlocked()) return;
     var round = state.round, item = round.question, written = $('writtenAnswer');
+    // 必听题：一次都没播过不让提交，避免不看听力直接猜
+    if (item.listenRequired && item.listen && listenLeft(item) === listenCap(item)) { toast('请先播放听力再作答'); return; }
     if (written ? (!written.value.trim() && !state.draft.drawing) : !state.selected.length) { toast('请先填写或选择答案'); return; }
     state.busy = true;
     request('/api/quiz/answer', { roundId: round.id, nonce: round.nonce, selections: state.selected, text: written ? written.value : '', drawing: state.draft ? state.draft.drawing : '' }, function (error, result) {
@@ -1219,6 +1274,10 @@
     if (action === 'play-audio' && state.round) {
       var audioTarget = state.round.studyPhase === 'memorize' && state.round.studyCards ? state.round.studyCards[state.cardIndex || 0] : state.round.question;
       if (audioTarget) nativeCall('playAudio', [audioTarget.audio || '']);
+    }
+    if (action === 'play-listen' && state.round) {
+      var listenTarget = state.round.studyPhase === 'memorize' && state.round.studyCards ? state.round.studyCards[state.cardIndex || 0] : state.round.question;
+      if (listenTarget && !playListen(listenTarget)) toast('这道题的听力已经播放完 ' + listenCap(listenTarget) + ' 次');
     }
     if (action === 'read-aloud') {
       if (state.round && state.round.studyPhase === 'memorize' && state.round.studyCards) {
