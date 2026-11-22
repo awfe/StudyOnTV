@@ -92,6 +92,11 @@
     button.textContent = left > 0 ? '▶ 播放听力（还可播 ' + left + ' 次）' : '听力已播放完';
     button.disabled = left <= 0;
     button.classList.toggle('answered', left <= 0);
+    // 播完置灰后不能让遥控器焦点停在禁用按钮上，否则按 OK 只弹提示、选不了选项
+    if (left <= 0) {
+      button.classList.remove('focusable');
+      if (button.classList.contains('focused')) focusDefault();
+    } else button.classList.add('focusable');
   }
   function formatOptionAnswer(item, i) {
     var raw = (item && item.a ? item.a : [])[i];
@@ -765,10 +770,10 @@
     if (item.listen && !item.audio) {
       var left = listenLeft(item);
       var listenBtn = document.createElement('button');
-      listenBtn.id = 'listenBtn'; listenBtn.className = 'btn btn-ghost focusable';
+      listenBtn.id = 'listenBtn';
+      listenBtn.className = 'btn btn-ghost' + (left > 0 ? ' focusable' : ' answered');
       listenBtn.textContent = left > 0 ? '▶ 播放听力（还可播 ' + left + ' 次）' : '听力已播放完';
       listenBtn.disabled = left <= 0;
-      if (left <= 0) listenBtn.classList.add('answered');
       if (window.SOTVNative) listenBtn.setAttribute('data-action', 'play-listen');
       else listenBtn.onclick = function () { playListen(item); };
       box.appendChild(listenBtn);
@@ -1080,7 +1085,8 @@
     }
     // 右上角更新提示也要能用遥控器选中
     if ($('updateTip').className.indexOf('show') >= 0) list = list.concat(all('#updateTip .focusable'));
-    return list.filter(function (el) { return el.offsetWidth > 0 || el.offsetHeight > 0; });
+    // 禁用的按钮不进焦点链：听力播完的「播放听力」不能把遥控器焦点吸住
+    return list.filter(function (el) { return !el.disabled && (el.offsetWidth > 0 || el.offsetHeight > 0); });
   }
   function reveal(el) {
     // 旧版电视 WebView 不支持 scrollIntoView({block}) 参数，手动滚动到可见
