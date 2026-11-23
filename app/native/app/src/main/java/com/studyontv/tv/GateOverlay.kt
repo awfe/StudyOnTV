@@ -112,16 +112,13 @@ class GateOverlay(
         lastError = detail
     }
 
-    private fun pageFor(reason: String): String =
-        if (reason in listOf("timeup", "feedback", "")) "quiz" else "lock?reason=$reason"
-
     fun show(reason: String): Boolean {
         if (attached) {
             // 已经挂载时管控原因变化（例如答题页中途跳进系统设置变成 settings，或恢复为 timeup）也要切换目标路由
             if (reason != currentReason) {
                 currentReason = reason
                 dismissInlineInput(notifyCancel = true)
-                val targetUrl = Prefs.localBase(context) + "#/" + pageFor(reason)
+                val targetUrl = Prefs.localBase(context) + "#/" + gateLearningPage(reason)
                 web?.let { view ->
                     view.loadUrl(targetUrl)
                     view.evaluateJavascript("window.SOTV_RESUME&&SOTV_RESUME()", null)
@@ -137,7 +134,7 @@ class GateOverlay(
         }
         handler.removeCallbacks(release); releaseScheduled = false
         val reused = web != null
-        val page = pageFor(reason)
+        val page = gateLearningPage(reason)
         val url = Prefs.localBase(context) + "#/$page"
         val view = web ?: WebShell(context).create("about:blank").also { created ->
             created.addJavascriptInterface(Bridge(), "SOTVNative")
@@ -407,6 +404,8 @@ class GateOverlay(
         }
         @JavascriptInterface fun readAloud(text: String) = SpeechReader.read(context, text, "", ::speechNotice)
         @JavascriptInterface fun readInLanguage(text: String, language: String) = SpeechReader.read(context, text, language, ::speechNotice)
+        /** 听力题：按题指定语速朗读（listenRate），rate 传 -1 表示跟随全局语速 */
+        @JavascriptInterface fun readWithRate(text: String, language: String, rate: Double) = SpeechReader.read(context, text, language, ::speechNotice, rate)
         @JavascriptInterface fun stopReading() = SpeechReader.stop()
         @JavascriptInterface fun playAudio(url: String) = SpeechReader.playAudio(context, url, ::speechNotice)
         /** 最近一次朗读 / 音频播放的结果（失败时 reason/message/degraded 有值，#87 不再静默） */

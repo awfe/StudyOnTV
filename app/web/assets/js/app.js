@@ -31,7 +31,7 @@
       }));
     } catch (e) {}
   }
-  function clearRound() { try { window.localStorage.removeItem(ROUND_KEY); } catch (e) {} }
+  function clearRound() { listenUsed = {}; lastListenAttempt = null; try { window.localStorage.removeItem(ROUND_KEY); } catch (e) {} }
   function savedRound() {
     try {
       var saved = JSON.parse(window.localStorage.getItem(ROUND_KEY) || 'null');
@@ -47,6 +47,7 @@
   }
   function canVoice() { return !!(window.SOTVNative && typeof window.SOTVNative.answerVoice === 'function'); }
   function canRead() { return !!(window.SOTVNative && typeof window.SOTVNative.readInLanguage === 'function'); }
+  function canReadRate() { return !!(window.SOTVNative && typeof window.SOTVNative.readWithRate === 'function'); }
   function isPureStudyMode() { return state.config && state.config.supervisionEnabled === false; }
   function isHubAvailable() { return isPureStudyMode() || !!(state.learning && state.learning.free); }
   function overrideKey(learning) {
@@ -61,6 +62,80 @@
     if (window.SOTV_PLAIN) return window.SOTV_PLAIN(text);
     return String(text == null ? '' : text).replace(/\$\$?/g, '').trim();
   }
+  // 听力题：listen 只交给朗读，屏幕上不显示；listenTimes 限制本组最多播几次（默认 5 次）
+  // 闪卡（memorize）与测验（quiz）阶段分开计数；朗读失败时自动退回本次计数
+  var listenUsed = {};
+  var lastListenAttempt = null;
+  function listenKey(item) {
+    var phase = (state.round && state.round.studyPhase === 'memorize') ? 'memorize' : 'quiz';
+    return phase + ':' + String((item && (item.id || item.q)) || '');
+  }
+  function listenCap(item) {
+    var cap = Number(item && item.listenTimes);
+    return cap >= 1 && cap <= 5 ? Math.floor(cap) : 5;
+  }
+  function listenLeft(item) { return Math.max(0, listenCap(item) - (listenUsed[listenKey(item)] || 0)); }
+  function refundListen(key, item) {
+    if (listenUsed[key] > 0) {
+      listenUsed[key] = listenUsed[key] - 1;
+      refreshListenBtn(item);
+    }
+  }
+  // 没有原生桥（电脑浏览器打开家长面板同款页面）时用 Web Speech API 兜底
+  function webSpeak(text, lang, onError) {
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return false;
+    var utterance = new window.SpeechSynthesisUtterance(String(text || ''));
+    utterance.lang = lang || 'en-US';
+    if (typeof onError === 'function') utterance.onerror = onError;
+    try { window.speechSynthesis.cancel(); window.speechSynthesis.speak(utterance); return true; } catch (e) { return false; }
+  }
+  function playListen(item) {
+    if (!item || !item.listen || listenLeft(item) <= 0) return false;
+    var key = listenKey(item);
+    var lang = item.language || 'en-US';
+    var rate = Number(item.listenRate);
+    var usedNative = false;
+    if (canReadRate() && rate >= 0.7 && rate <= 1.5) {
+      nativeCall('readWithRate', [item.listen, lang, rate]);
+      usedNative = true;
+    } else if (canRead()) {
+      nativeCall('readInLanguage', [item.listen, lang]);
+      usedNative = true;
+    } else {
+      var refunded = false;
+      var ok = webSpeak(item.listen, lang, function () {
+        if (refunded) return;
+        refunded = true;
+        refundListen(key, item);
+      });
+      if (!ok) {
+        toast('当前设备暂不支持朗读听力');
+        return false;
+      }
+    }
+    listenUsed[key] = (listenUsed[key] || 0) + 1;
+    lastListenAttempt = usedNative ? { key: key, item: item } : null;
+    refreshListenBtn(item);
+    return true;
+  }
+  // 只改按钮文案，不重渲染整页：重渲染会再触发一次自动朗读
+  function refreshListenBtn(item) {
+    var button = $('listenBtn');
+    if (!button || !item) return;
+    var left = listenLeft(item);
+    button.textContent = left > 0 ? '▶ 播放听力（还可播 ' + left + ' 次）' : '听力已播放完';
+    button.disabled = left <= 0;
+    // 播完置灰后不能让遥控器焦点停在禁用按钮上，否则按 OK 只弹提示、选不了选项
+    // 使用 ES5 兼容的 add/remove 代替二参 classList.toggle，兼容旧版电视 WebView
+    if (left <= 0) {
+      button.classList.add('answered');
+      button.classList.remove('focusable');
+      if (button.classList.contains('focused')) focusDefault();
+    } else {
+      button.classList.remove('answered');
+      button.classList.add('focusable');
+    }
+  }
   function formatOptionAnswer(item, i) {
     var raw = (item && item.a ? item.a : [])[i];
     if (!raw || !String(raw).trim()) return '选项 ' + String.fromCharCode(65 + i);
@@ -73,6 +148,7 @@
   }
   function readText(item) {
     if (!item) return '';
+    if (item.listen) return speakable(item.listen);
     var parts = [speakable(item.q)];
     if (readScope() !== 'question' && item.a && item.a.length) {
       (item.a || []).forEach(function (_, index) { parts.push(formatSpokenOption(item, index)); });
@@ -277,11 +353,12 @@
     return out;
   }
 
-  function start(arg) {
+  function start(arg, fromGate) {
     if (state.busy) return;
     var payload = buildStartPayload(arg);
     if (payload.focus) state.lastStartOpts = payload;
     else if (!arg) state.lastStartOpts = null;
+    if (fromGate === true) payload.fromGate = true;
     state.busy = true;
     request('/api/quiz/start', payload, function (error, result) {
       state.busy = false;
@@ -362,7 +439,8 @@
       if (result.watching && !payload.focus) {
         state.lockReason = '';
         show('lock'); $('lockTitle').textContent = '已解锁使用时间';
-        $('lockDesc').textContent = '还可以使用 ' + Math.ceil(state.learning.remainingSeconds / 60) + ' 分钟';
+        var watchSeconds = (state.learning.remainingSeconds || 0) + (state.learning.freeQuotaSeconds || 0);
+        $('lockDesc').textContent = '还可以使用 ' + Math.ceil(watchSeconds / 60) + ' 分钟';
         icon($('lockIcon'), 'check'); $('lockNote').textContent = '';
         $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="home">返回桌面</button>' +
           '<button class="btn btn-ghost focusable" data-action="start-study" data-focus="quiz">继续练题</button>';
@@ -425,7 +503,8 @@
     $('qText').className = 'question' + (qLength > 120 ? ' longer' : qLength > 56 ? ' long' : '');
     renderMedia(card);
     if (!state.cardRevealed) {
-      if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [speakable(card.q), card.language || '']);
+      if (card.listen && state.speech && state.speech.autoRead) playListen(card);
+      else if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [speakable(card.q), card.language || '']);
       else nativeCall('stopReading');
     }
 
@@ -623,7 +702,11 @@
     $('qDots').textContent = round.mode === 'streak' ? '连续答对 ' + round.streak + ' 题' : '';
     var qLength = speakable(item.q).length;
     $('qText').className = 'question' + (qLength > 120 ? ' longer' : qLength > 56 ? ' long' : '');
-    if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [readText(item), item.language || '']);
+    if (item.listen) {
+      // 听力题只播听力文本：题干和选项一律不进 TTS，否则选项被念出来等于给答案
+      if (state.speech && state.speech.autoRead) playListen(item);
+      else nativeCall('stopReading');
+    } else if (state.speech && state.speech.autoRead) nativeCall('readInLanguage', [readText(item), item.language || '']);
     else nativeCall('stopReading');
     renderMedia(item);
     var options = $('qOptions'); options.innerHTML = '';
@@ -740,6 +823,18 @@
       if (window.SOTVNative) { var play = document.createElement('button'); play.className = 'btn btn-ghost focusable'; play.setAttribute('data-action', 'play-audio'); play.textContent = '播放题目音频'; box.appendChild(play); }
       else { var audio = document.createElement('audio'); audio.src = item.audio; audio.controls = true; audio.className = 'focusable'; audio.preload = 'none'; box.appendChild(audio); }
     }
+    // 听力题：不摆音频文件，点按钮让设备朗读 listen（listenTimes 次为上限）
+    if (item.listen && !item.audio) {
+      var left = listenLeft(item);
+      var listenBtn = document.createElement('button');
+      listenBtn.id = 'listenBtn';
+      listenBtn.className = 'btn btn-ghost' + (left > 0 ? ' focusable' : ' answered');
+      listenBtn.textContent = left > 0 ? '▶ 播放听力（还可播 ' + left + ' 次）' : '听力已播放完';
+      listenBtn.disabled = left <= 0;
+      if (window.SOTVNative) listenBtn.setAttribute('data-action', 'play-listen');
+      else listenBtn.onclick = function () { playListen(item); };
+      box.appendChild(listenBtn);
+    }
   }
   function addSubmit(parent, value) {
     var button = document.createElement('button'); button.className = 'btn btn-primary focusable answer-submit';
@@ -760,6 +855,8 @@
   function submit() {
     if (state.busy || !state.round || questionInputBlocked()) return;
     var round = state.round, item = round.question, written = $('writtenAnswer');
+    // 必听题：一次都没播过不让提交，避免不看听力直接猜
+    if (item.listenRequired && item.listen && listenLeft(item) === listenCap(item)) { toast('请先播放听力再作答'); return; }
     if (written ? (!written.value.trim() && !state.draft.drawing) : !state.selected.length) { toast('请先填写或选择答案'); return; }
     state.busy = true;
     request('/api/quiz/answer', { roundId: round.id, nonce: round.nonce, selections: state.selected, text: written ? written.value : '', drawing: state.draft ? state.draft.drawing : '' }, function (error, result) {
@@ -956,8 +1053,12 @@
       // 服务端按家长设置的时区算好文案，设备时区不对时也能和规则对得上
       when = state.learning.nextAtText || '';
       if (!when) {
+        // 和服务端同一个口径：今明两天说「今天 / 明天」，再远显示日期（Issue #147）
         var date = new Date(state.learning.nextAvailableAt);
-        when = (date.getMonth() + 1) + ' 月 ' + date.getDate() + ' 日 ' + ('0' + date.getHours()).slice(-2) + ':' + ('0' + date.getMinutes()).slice(-2);
+        var hm = ('0' + date.getHours()).slice(-2) + ':' + ('0' + date.getMinutes()).slice(-2);
+        var today = new Date(); today.setHours(0, 0, 0, 0);
+        var days = Math.round((new Date(date.getFullYear(), date.getMonth(), date.getDate()) - today) / 86400000);
+        when = days === 0 ? '今天 ' + hm : days === 1 ? '明天 ' + hm : (date.getMonth() + 1) + ' 月 ' + date.getDate() + ' 日 ' + hm;
       }
     }
     $('lockDesc').textContent = when ? '下次可用：' + when : reason === 'timeup' ? '完成学习任务后才能使用设备' : '现在暂不可用';
@@ -1065,7 +1166,8 @@
     }
     // 右上角更新提示也要能用遥控器选中
     if ($('updateTip').className.indexOf('show') >= 0) list = list.concat(all('#updateTip .focusable'));
-    return list.filter(function (el) { return el.offsetWidth > 0 || el.offsetHeight > 0; });
+    // 禁用的按钮不进焦点链：听力播完的「播放听力」不能把遥控器焦点吸住
+    return list.filter(function (el) { return !el.disabled && (el.offsetWidth > 0 || el.offsetHeight > 0); });
   }
   function reveal(el) {
     // 旧版电视 WebView 不支持 scrollIntoView({block}) 参数，手动滚动到可见
@@ -1276,30 +1378,61 @@
       var audioTarget = state.round.studyPhase === 'memorize' && state.round.studyCards ? state.round.studyCards[state.cardIndex || 0] : state.round.question;
       if (audioTarget) nativeCall('playAudio', [audioTarget.audio || '']);
     }
+    if (action === 'play-listen' && state.round) {
+      var listenTarget = state.round.studyPhase === 'memorize' && state.round.studyCards ? state.round.studyCards[state.cardIndex || 0] : state.round.question;
+      if (listenTarget && !playListen(listenTarget)) toast('这道题的听力已经播放完 ' + listenCap(listenTarget) + ' 次');
+    }
     if (action === 'read-aloud') {
       if (state.round && state.round.studyPhase === 'memorize' && state.round.studyCards) {
         var mCard = state.round.studyCards[state.cardIndex || 0];
         if (mCard) {
-          var cardSpoken = speakable(mCard.q);
+          if (mCard.listen && !state.cardRevealed) {
+            if (!playListen(mCard)) toast('这道题的听力已经播放完 ' + listenCap(mCard) + ' 次');
+            return;
+          }
+          var cardSpoken = mCard.listen ? '' : speakable(mCard.q);
           if (state.cardRevealed) {
             var cardAns = speakable(formatCardAnswerFallback(mCard));
-            if (cardAns) cardSpoken += '。正确答案：' + cardAns;
-            if (mCard.tip) cardSpoken += '。解析：' + speakable(mCard.tip);
+            if (cardAns) cardSpoken += (cardSpoken ? '。' : '') + '正确答案：' + cardAns;
+            if (mCard.tip) cardSpoken += (cardSpoken ? '。' : '') + '解析：' + speakable(mCard.tip);
           }
-          nativeCall('readInLanguage', [cardSpoken, mCard.language || '']);
+          if (cardSpoken) {
+            lastListenAttempt = null;
+            nativeCall('readInLanguage', [cardSpoken, mCard.language || '']);
+          }
         }
         return;
       }
-      // 作答后这一下就是「再读一遍」：题干 + 选项（按家长设置的朗读范围）+ 正确答案
+      // 听力题点击「朗读」时只走听力播放（受 listenTimes / listenRate 约束，不剧透题干与选项）
       var readItem = state.round ? state.round.question : null;
-      var spoken = readItem ? readText(readItem) : '';
       var feedback = state.feedback;
+      if (readItem && readItem.listen) {
+        if (!feedback) {
+          if (!playListen(readItem)) toast('这道题的听力已经播放完 ' + listenCap(readItem) + ' 次');
+          return;
+        }
+        if (readScope() === 'questionOptionsAnswer') {
+          var listenCorrect = (feedback.correctIndices || []).map(function (i) {
+            return formatSpokenOption(readItem, i);
+          }).join('，') || speakable(feedback.answerText || '');
+          if (listenCorrect) {
+            lastListenAttempt = null;
+            nativeCall('readInLanguage', ['正确答案：' + listenCorrect, readItem.language || '']);
+            return;
+          }
+        }
+        if (!playListen(readItem)) toast('这道题的听力已经播放完 ' + listenCap(readItem) + ' 次');
+        return;
+      }
+      // 作答后这一下就是「再读一遍」：题干 + 选项（按家长设置的朗读范围）+ 正确答案
+      var spoken = readItem ? readText(readItem) : '';
       if (feedback && readItem && readScope() === 'questionOptionsAnswer') {
         var correct = (feedback.correctIndices || []).map(function (i) {
           return formatSpokenOption(readItem, i);
         }).join('，') || speakable(feedback.answerText || '');
         if (correct) spoken += '。正确答案：' + correct;
       }
+      lastListenAttempt = null;
       nativeCall('readInLanguage', [spoken, readItem ? readItem.language || '' : '']);
     }
     // retry 用于错误 / 空题库的重试，start-quiz 用于「时间到了」页的「开始答题」；两者都重新取题
@@ -1340,6 +1473,7 @@
   function route() {
     window.clearTimeout(nextTimer); clearResumeTimer(); state.busy = false; hideFeedback();
     var hash = location.hash || '#/quiz';
+    var fromGate = hash.indexOf('?reason=') >= 0;
     state.settingsGate = hash.indexOf('reason=settings') >= 0;
     if (hash.indexOf('#/pair') === 0) return pair();
     loadState(function (error) {
@@ -1352,6 +1486,8 @@
         renderHub();
         return;
       }
+      if (fromGate && !state.settingsGate && !state.learning.reason && state.learning.freeQuotaSeconds > 0 &&
+          state.config.playMode !== 'practice') return start(null, true);
       // 答题途中被系统清掉再打开：服务端还停在同一题、当前也确实该答题时，恢复原来那组
       if (!state.settingsGate && hash.indexOf('#/lock') !== 0 && !state.learning.reason && !state.learning.free &&
           !state.learning.awaitingReview && !((state.children || []).length > 1 && !state.chosen)) {
@@ -1367,7 +1503,7 @@
       }
       if (hash.indexOf('#/lock') === 0 && !state.learning.free && !isPureStudyMode()) lock(state.learning.reason || 'timeup');
       else if ((state.children || []).length > 1 && !state.chosen) chooseChild();
-      else start();
+      else start(null, fromGate);
     });
   }
   function resumeSync() {
@@ -1506,7 +1642,7 @@
         if (state.screen === 'lock' && (state.lockReason !== state.learning.reason || state.wasFree !== !!state.learning.free)) {
           state.wasFree = !!state.learning.free;
           if (isHubAvailable()) renderHub();
-          else if (!state.learning.reason) start();
+          else if (!state.learning.reason) start(null, true);
           else lock(state.learning.reason);
           return;
         }
@@ -1571,7 +1707,15 @@
   window.SOTV_UPDATE = function (info) { if (!info || !info.latest) return; window.currentUpdate = info;
     try { if (!info.force && window.localStorage.setItem && window.localStorage.getItem('sotv_update_dismissed') === info.latest) return; } catch (e) {} $('updateText').textContent = '发现新版本 v' + info.latest; $('updateTip').className = 'update-tip show'; };
   // 朗读失败（没有系统语音、云端 Key 不对、语言不支持…）直接显示在电视上，不能再「点了没声音」
-  window.SOTV_SPEECH_NOTICE = function (info) { if (!info || info.ok !== false) return; toast(String(info.message || '朗读失败，请重试')); };
+  window.SOTV_SPEECH_NOTICE = function (info) {
+    if (!info || info.ok !== false) return;
+    if (lastListenAttempt) {
+      var attempt = lastListenAttempt;
+      lastListenAttempt = null;
+      refundListen(attempt.key, attempt.item);
+    }
+    toast(String(info.message || '朗读失败，请重试'));
+  };
   window.SOTV_NAVIGATION_BLOCKED = function (message) { toast(message || '现在暂不可用'); return true; };
   window.TV = {
     move: move,

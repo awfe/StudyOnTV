@@ -130,6 +130,10 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
             image: q.image || '',
             images: questionImages(q),
             audio: q.audio || '',
+            listen: q.listen || '',
+            listenTimes: q.listenTimes != null ? String(q.listenTimes) : '5',
+            listenRequired: !!q.listenRequired,
+            listenRate: q.listenRate != null ? String(q.listenRate) : '',
             language: q.language ?? 'zh-CN',
             enabled: copy ? true : q.enabled,
           }

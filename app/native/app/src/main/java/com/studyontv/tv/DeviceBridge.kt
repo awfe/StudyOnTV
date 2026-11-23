@@ -204,6 +204,10 @@ open class DeviceBridge(protected val activity: Activity, private val connection
     @JavascriptInterface
     fun readInLanguage(text: String, language: String) = SpeechReader.read(activity, text, language, ::speechNotice)
 
+    /** 听力题：按题指定语速朗读（listenRate），rate 传 -1 表示跟随朗读设置里的全局语速 */
+    @JavascriptInterface
+    fun readWithRate(text: String, language: String, rate: Double) = SpeechReader.read(activity, text, language, ::speechNotice, rate)
+
     @JavascriptInterface
     fun stopReading() = SpeechReader.stop()
 
