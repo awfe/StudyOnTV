@@ -1,21 +1,21 @@
 {
-  "version": "0.5.2",
-  "versionCode": 49,
+  "version": "0.5.3",
+  "versionCode": 50,
   "force": false,
-  "notes": "v0.5.2\n\n新增 EU 仅本地隐私版（Local-Only）：\n- 新增 StudyOnTV-Android-TV-EU-LocalOnly 与 StudyOnTV-Mobile-EU-LocalOnly 安装包（面向欧洲及注重隐私的家庭，彻底禁用公网连接、在线更新、云端 AI/语音与在线题库/节假日联网，仅允许局域网本地服务如 Ollama 与本机系统语音，完整保留同 Wi-Fi 扫码管理，#175）\n\n语音朗读与 AI 体验修复：\n- 修复 DeepSeek 云端朗读返回流式 WAV（0xFFFFFFFF 哨兵长度）时解析失败导致电视无声的问题（#174）\n- 支持微软 Edge 免费朗读 Sec-MS-GEC v2 握手，修复部分电视返回 403 无声的问题（#179 / PR #180）\n- 统一共用「模型 API」与「题目朗读」的 DeepSeek Key（只填一次即可），无内置语音的电视自动回落 DeepSeek 朗读\n- AI 出题/批改与 DeepSeek 语音全面中文化报错（如 HTTP 402 余额不足明确提示中文原因），云端失败回落时不再吞掉真实报错\n- AI 高级设置新增 temperature 配置，兼容只接受默认温度的推理模型自动降级（#177 / PR #182）\n\n自动更新、白名单与界面修复：\n- 修复应用内自动更新下载到 100% 失败的问题：校验 APK 文件头与 Content-Type、透传跳转 Cookie，链接签名过期时自动刷新直链重试（#183）\n- 彻底修复「不计时白名单」应用连续使用超过 30 分钟后偶发重新开始计时的问题（无障碍实时窗口续查 + 白名单未退后台保活）\n- 修复 1080p 电视「退出回桌面」按钮叠在「闪卡背诵模式」卡片上的遮挡问题（#178 / PR #181）\n- 修复家长在锁屏输入密码时系统安全键盘/输入法被误判为前台应用的问题，并补全华为/荣耀手机「休眠不断网」保活指引\n- 优化家长端题库筛选侧栏布局与滚动条体验（PR #176）",
-  "publishedAt": "2026-11-22T04:31:38.261Z",
+  "notes": "v0.5.3\n\n全链路 LaTeX 数学与理化公式支持：\n- 完整支持行内公式 $...$ / \\(...\\)、独立公式 ... / \\[...\\] 及 \\begin{cases} 等方程组环境，题库列表、详情抽屉、答题记录与电视做题端全面渲染\n- 家长出题编辑器新增「LaTeX 公式快捷栏」（分数、根号、上下标、乘除、角度、方程组一键插入）与实时预览条\n- AI 出题自动输出规范 LaTeX 公式；电视语音朗读自动将常见公式符号转为自然中文口语（如分数、根号、平方、角度等）\n\n新手上手与 UI/UX 全面优化：\n- 家长端题库直接露出「在线题库市场」「导入 Word/PDF/JSON」「AI 出题」入口，空题库补齐一键操作按钮，优化 Word/PDF 导入提示\n- 修复白名单权限告警误报（monitor.usage 字段对齐），重构「时间计划」排版（全天管控置顶、高级排障项折叠）并修正周时段图例\n- 优化手机端设置页标签栏为横向滚动（不再吸顶折行遮挡屏幕）；朗读设置「自动」模式不再一次展开 9 个密钥框；登录页补充新手查看地址/密码指引\n- 手机/平板端「家长连接」页新增本机打开与复制地址按钮，无 Wi-Fi 时自动回退 127.0.0.1；修复纯学习模式补开权限后切回管控不生效的问题\n- 修复 TV 多孩子模式下「退出回桌面」按钮遮挡孩子切换条、旧电视家长页 OK 键失灵、悬浮层内联输入框被软键盘遮挡、TV 答题解析超两行截断及闪卡中途重进重复评分问题\n\n核心稳定性、安全与 EU 仅本地隐私版加固：\n- EU 仅本地隐私版（EU-LocalOnly）彻底阻断 Bugly 初始化、远程题库自动同步、公益视频公网播放与公网 DNS 解析，后端向管理面板透传纯本地状态\n- 开启无障碍窗口内容读取使白名单 30 分钟实时窗口续命真正生效；修复分屏/多窗口绕过计时锁屏与快速息屏刷免费时长漏洞\n- 修复不可见悬浮窗死循环降级、SQLite 写事务与多孩子切换 AB-BA 死锁、语音引擎重初始化死循环、更新安装主线程 ANR、Edge 朗读 TLS 主机名校验及局域网接口 CORS 反射 null 漏洞",
+  "publishedAt": "2026-11-23T14:04:25.926Z",
   "assets": {
     "tv": {
-      "name": "StudyOnTV-Android-TV-v0.5.2.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.2/StudyOnTV-Android-TV-v0.5.2.apk",
-      "sha256": "ea3617397b38f4f75ce9105db26bb10da271c820e6a38233a4fee16d77d4130a",
-      "size": 3462240
+      "name": "StudyOnTV-Android-TV-v0.5.3.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.3/StudyOnTV-Android-TV-v0.5.3.apk",
+      "sha256": "e0897e4922352e895daac365e26c7f4eaaa4f4aef6e83af5ec6ca05d5182906a",
+      "size": 3470511
     },
     "mobile": {
-      "name": "StudyOnTV-Mobile-v0.5.2.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.2/StudyOnTV-Mobile-v0.5.2.apk",
-      "sha256": "30d5b5c2c9e8e3ec31511128cd81c108f02eba9afc774bd9b323d01a11d6dbff",
-      "size": 3464629
+      "name": "StudyOnTV-Mobile-v0.5.3.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.3/StudyOnTV-Mobile-v0.5.3.apk",
+      "sha256": "65d4acf8b50133d43bf582274f423317378dce64f8a837fa6dfd042b922287a1",
+      "size": 3473142
     }
   }
 }
