@@ -78,6 +78,8 @@ object SpeechReader {
     private var cachedContext: Context? = null
     @Volatile private var currentText = ""
     @Volatile private var currentLanguage = ""
+    /** 单次朗读的语速覆盖：听力题可以按题指定，-1 表示跟随全局 speechRate */
+    @Volatile private var currentRate = -1.0
     @Volatile private var lastUtteranceId = ""
     @Volatile private var retriedDefault = false
     @Volatile private var retriedSpeakError = false
@@ -176,12 +178,16 @@ object SpeechReader {
     /**
      * 朗读。`language` 是题目语言；引擎不支持时先回落设备默认语言，再不行回报失败。
      * `notice` 由桥传入，失败时回调（网页里有 window.SOTV_SPEECH_NOTICE 就能显示提示）。
+     * `rate` 是本次朗读的语速（听力题的 listenRate），-1 表示用朗读设置里的全局语速。
      */
-    fun read(context: Context, text: String, language: String = "", notice: ((JSONObject) -> Unit)? = null) {
+    fun read(context: Context, text: String, language: String = "", notice: ((JSONObject) -> Unit)? = null, rate: Double = -1.0) {
         if (text.isBlank()) return
         val app = context.applicationContext
         main.post {
             val config = try { JSONObject(DeviceRuntime.store.get("speech_settings", "{}")) } catch (_: Throwable) { JSONObject() }
+            // 听力题按题指定语速：写进本次配置副本，云端合成与缓存键都会跟着用这个语速
+            currentRate = if (rate.isFinite() && rate in 0.7..1.5) rate else -1.0
+            if (currentRate > 0) config.put("speechRate", currentRate)
             val mode = config.optString("mode", "auto")
             val chosen = when {
                 LocalOnlyGuard.enabled -> "system"
@@ -211,6 +217,12 @@ object SpeechReader {
             if (chosen == "system") systemRead(app, clean, spoken, request)
             else cloudPart(app, cloudChunks(clean, chosen), 0, spoken, config, chosen, request)
         }
+    }
+
+    /** 本次朗读实际使用的语速：听力题按题指定优先，否则取朗读设置里的全局值 */
+    private fun rateOf(config: JSONObject): Double {
+        val raw = if (currentRate in 0.7..1.5) currentRate else config.optDouble("speechRate", 1.0)
+        return raw.takeIf { it.isFinite() }?.coerceIn(0.7, 1.5) ?: 1.0
     }
 
     /** 题目音频。老电视的 https / mp3 兼容性差时不再“点了没反应”：记录诊断 + Toast + 回报给前端 */
@@ -449,7 +461,7 @@ object SpeechReader {
         }
         try { engine.setAudioAttributes(attributes) } catch (_: Exception) { }
         try {
-            val rate = currentSettings().optDouble("speechRate", 1.0).takeIf { it.isFinite() }?.coerceIn(0.7, 1.5) ?: 1.0
+            val rate = rateOf(currentSettings())
             engine.setSpeechRate(rate.toFloat())
         } catch (_: Exception) { }
         currentText = text; currentLanguage = plan.language

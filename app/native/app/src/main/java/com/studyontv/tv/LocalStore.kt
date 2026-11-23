@@ -1725,6 +1725,19 @@ class LocalStore(
         val rawAudio = item.optString("audio").trim()
         require(rawAudio.isEmpty() || ((rawAudio.startsWith("https://") || rawAudio.startsWith("http://")) && rawAudio.length <= 2048)) { "图片或音频地址无效" }
         details.put("audio", rawAudio)
+        // 听力题：listen 只交给朗读，屏幕上不显示，等于「声音和文字解耦」；与音频地址二选一
+        val listen = item.optString("listen").trim()
+        require(listen.isEmpty() || listen.length <= 1000) { "听力文本不能超过 1000 字" }
+        require(listen.isEmpty() || rawAudio.isEmpty()) { "听力文本和音频地址只能二选一" }
+        details.put("listen", listen)
+        if (listen.isEmpty()) {
+            details.remove("listenTimes"); details.remove("listenRequired"); details.remove("listenRate")
+        } else {
+            details.put("listenTimes", item.optInt("listenTimes", 5).coerceIn(1, 5))
+            details.put("listenRequired", item.optBoolean("listenRequired", false))
+            val listenRate = item.optDouble("listenRate", -1.0)
+            if (listenRate.isFinite() && listenRate in 0.7..1.5) details.put("listenRate", listenRate) else details.remove("listenRate")
+        }
         if (item.has("images")) {
             val rawImages = item.optJSONArray("images") ?: JSONArray()
             require(rawImages.length() <= 4) { "每道题最多支持 4 张配图" }
