@@ -86,7 +86,15 @@ object EdgeTts {
             val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
             return (sslFactory.createSocket(raw, HOST, PORT, true) as SSLSocket).apply {
                 soTimeout = 15_000
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    sslParameters = sslParameters.apply {
+                        endpointIdentificationAlgorithm = "HTTPS"
+                    }
+                }
                 startHandshake()
+                if (!javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(HOST, session)) {
+                    throw javax.net.ssl.SSLPeerUnverifiedException("Hostname $HOST not verified")
+                }
             }
         } catch (e: Throwable) {
             try { raw.close() } catch (_: Exception) { }

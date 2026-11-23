@@ -20,6 +20,7 @@ import android.webkit.WebView
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONObject
 
@@ -211,13 +212,16 @@ class GateOverlay(
         if (!attached) return
         dismissInlineInput(notifyCancel = false)
         val dp = context.resources.displayMetrics.density
+        val scroll = ScrollView(context).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            setBackgroundColor(TvUi.background(context))
+            isClickable = true
+        }
         val panel = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setBackgroundColor(TvUi.background(context))
-            setPadding((64 * dp).toInt(), (36 * dp).toInt(), (64 * dp).toInt(), (24 * dp).toInt())
-            isClickable = true
-            isFocusable = true
+            setPadding((64 * dp).toInt(), (24 * dp).toInt(), (64 * dp).toInt(), (24 * dp).toInt())
         }
         panel.addView(TextView(context).apply {
             text = if (passwordMode) "家长验证" else "填写答案"
@@ -292,8 +296,9 @@ class GateOverlay(
         addBtn("清空") { edit.setText("") }
         addBtn("取消") { commit(false) }
         panel.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = (20 * dp).toInt() })
-        host.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        inlineInputPanel = panel
+        scroll.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        host.addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        inlineInputPanel = scroll
         edit.requestFocus()
         edit.post {
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager

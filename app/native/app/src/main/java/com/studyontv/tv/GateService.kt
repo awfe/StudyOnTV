@@ -240,7 +240,7 @@ class GateService : Service() {
         val canOverlay = state.canOverlay
         val protecting = state.protecting
         val settingsBlocked = state.settingsBlocked
-        // attach 了却一直不可见：不能算「已弹出」，当作失败并重试（hide 会解除静音）
+        // attach 了却一直不可见：不能算「已弹出」，当作失败并重试（hide 会解除静音）；连续失败达到阈值直接降级全屏 Activity
         if (overlay.isShowing && !overlay.presenting(now)) {
             lastGateError = overlay.lastError.ifEmpty { "overlay attached but not visible kind=${overlay.lastErrorKind}" }
             lastGateErrorAt = now
@@ -248,6 +248,10 @@ class GateService : Service() {
             Diag.warn("Gate", "overlay attached but never visible (attempt=$gateFailures) $lastGateError → hide and retry")
             // 用 hide 而不是 destroy：保留 WebView 供 60 秒内下次弹出复用，避免每几秒重建一次
             overlay.hide()
+            if (gateFailures >= 2 && (protecting || settingsBlocked) && gateReason.isNotEmpty()) {
+                fallbackToActivity(now, gateReason)
+                return
+            }
         }
         if (WatchAccessibilityService.hasGate() && !WatchAccessibilityService.presentedGate(now)) {
             lastGateError = WatchAccessibilityService.lastGateError()
@@ -255,6 +259,20 @@ class GateService : Service() {
             gateFailures++
             Diag.warn("Gate", "accessibility gate attached but never visible (attempt=$gateFailures) $lastGateError → hide and retry")
             WatchAccessibilityService.hideGate()
+            if (gateFailures >= 2 && (protecting || settingsBlocked) && gateReason.isNotEmpty()) {
+                fallbackToActivity(now, gateReason)
+                return
+            }
+        }
+        // 只有真正校验可见后才清零失败计数（不能在 overlay.show() 刚 addView 返回 true 时就清零）
+        val gateVerifiedVisible = (overlay.isShowing && overlay.verifiedVisible) ||
+            (WatchAccessibilityService.hasGate() && WatchAccessibilityService.presentedGate(now) &&
+                now - lastGate >= GatePresentation.VISIBILITY_GRACE_MS)
+        if (gateVerifiedVisible && gateFailures > 0) {
+            Diag.info("Gate", "gate verified visible after $gateFailures failed attempts reason=$gateReason")
+            gateFailures = 0
+            lastGateError = ""
+            lastGateErrorAt = -1L
         }
         // 全屏学习页已经在前台 = 已经弹出来了（SDK<26 的老盒子走的就是这条路），
         // 不要再每 2 秒重复拉起 / 重复写日志。
@@ -299,10 +317,7 @@ class GateService : Service() {
             false
         }
         if (shown) {
-            if (gateFailures > 0) Diag.info("Gate", "gate shown after $gateFailures failed attempts reason=$gateReason")
-            gateFailures = 0
-            lastGateError = ""
-            lastGateErrorAt = -1L
+            // addView 成功不代表窗口真正可见；等 overlay.presenting(now) / verifiedVisible 通过后再清零 gateFailures
             return
         }
         gateFailures++

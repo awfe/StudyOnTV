@@ -29,6 +29,7 @@ object BankAutomation {
         require(url.protocol in listOf("http", "https") && url.userInfo == null && url.ref == null && url.host.isNotEmpty() && url.toString().length <= 2048) {
             "请使用不含用户名密码的 HTTP/HTTPS 地址"
         }
+        LocalOnlyGuard.requireLocalUrl(url.toString(), "远程题库")
         val ok = url.protocol == "https" || (url.protocol == "http" && isPrivateHost(url.host))
         require(ok) { "公网远程题库必须使用 HTTPS；HTTP 只允许局域网或本机地址" }
         return url
@@ -101,6 +102,7 @@ object BankAutomation {
                 for (i in 0 until sources.length()) {
                     val source = sources.getJSONObject(i)
                     if (!source.optBoolean("enabled", true)) continue
+                    if (LocalOnlyGuard.enabled && !LocalOnlyGuard.isLocalUrl(source.optString("url"))) continue
                     val entry = JSONObject().put("name", source.getString("name"))
                     try { entry.put("imported", syncSource(store, source)).put("ok", true) }
                     catch (_: Exception) { entry.put("ok", false).put("message", "同步失败，请检查远程 JSON、地址和网络；本地题库已保留") }

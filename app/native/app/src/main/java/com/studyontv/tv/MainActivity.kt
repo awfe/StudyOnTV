@@ -159,8 +159,8 @@ open class MainActivity : Activity() {
             }
             return super.dispatchKeyEvent(event)
         }
-        // 手机 / 平板的回车键交给网页输入框
-        if (!DeviceBridge.isTv(this) && event.keyCode == KeyEvent.KEYCODE_ENTER) return super.dispatchKeyEvent(event)
+        // 手机 / 平板把方向键和回车交给网页输入框，仅拦截返回键给 window.TV.back()
+        if (!DeviceBridge.isTv(this) && event.keyCode != KeyEvent.KEYCODE_BACK) return super.dispatchKeyEvent(event)
         val view = if (::web.isInitialized && !webReleased) web else null
         return remote.handle(view, event) || super.dispatchKeyEvent(event)
     }

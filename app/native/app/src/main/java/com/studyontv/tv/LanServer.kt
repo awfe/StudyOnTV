@@ -36,7 +36,7 @@ class LanServer(
         internal fun allowedCorsOrigin(origin: String?): String? {
             if (origin == null || origin.isBlank()) return "*"
             val trimmed = origin.trim()
-            if (trimmed == "null") return "null"
+            if (trimmed.equals("null", ignoreCase = true)) return null
             val uri = try { URI(trimmed) } catch (_: Exception) { return null }
             val scheme = uri.scheme?.lowercase(Locale.US) ?: return null
             if (scheme != "http" && scheme != "https") return null
@@ -579,11 +579,11 @@ class LanServer(
         }
         router.get("/api/device") { ctx ->
             json(ctx, 200, JSONObject().put("name", Prefs.deviceName(context))
-                .put("version", BuildConfig.VERSION_NAME).put("flavor", BuildConfig.FLAVOR).put("ip", localIp() ?: "").put("port", boundPort)
+                .put("version", BuildConfig.VERSION_NAME).put("flavor", BuildConfig.FLAVOR).put("localOnly", LocalOnlyGuard.enabled).put("ip", localIp() ?: "").put("port", boundPort)
                 .put("uninstallProtected", UninstallGuard.active(context)).put("deviceOwner", UninstallGuard.owner(context))
                 .put("launcherHidden", LauncherIcon.hidden(context)).put("desktop", DesktopMode.state(context)).put("autostart", Watchdog.report(context)).put("monitor", GateService.diagnostics(context))
                 .put("timezone", DeviceClock.describe(store)).put("deviceTime", DeviceClock.calendar(store).time.toString())
-                .put("keepalive", KeepAlive.report(context)).put("buglyConsent", Prefs.buglyConsent(context))
+                .put("keepalive", KeepAlive.report(context)).put("buglyConsent", !LocalOnlyGuard.enabled && Prefs.buglyConsent(context))
                 .put("crashUpload", crashUploadState(context)))
         }
         router.put("/api/device/crash") { ctx ->
@@ -598,9 +598,14 @@ class LanServer(
             json(ctx, 200, JSONObject().put("ok", true).put("crashUpload", crashUploadState(context)))
         }
         router.put("/api/device/bugly") { ctx ->
-            val enabled = JSONObject(ctx.body).optBoolean("enabled")
-            if (enabled) BuglyInit.initWithConsent(context) else BuglyInit.revoke(context)
-            json(ctx, 200, JSONObject().put("ok", true).put("buglyConsent", Prefs.buglyConsent(context)))
+            if (LocalOnlyGuard.enabled) {
+                BuglyInit.revoke(context)
+                json(ctx, 200, JSONObject().put("ok", true).put("buglyConsent", false).put("localOnly", true))
+            } else {
+                val enabled = JSONObject(ctx.body).optBoolean("enabled")
+                if (enabled) BuglyInit.initWithConsent(context) else BuglyInit.revoke(context)
+                json(ctx, 200, JSONObject().put("ok", true).put("buglyConsent", Prefs.buglyConsent(context)))
+            }
         }
         router.delete("/api/device/uninstall-guard") { ctx ->
             try {

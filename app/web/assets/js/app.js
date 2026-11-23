@@ -113,6 +113,7 @@
     toastTimer = window.setTimeout(function () { box.className = 'toast'; }, 3000);
   }
   function show(screen) {
+    if (screen !== 'quiz') nativeCall('stopReading');
     all('.screen').forEach(function (el) { el.className = 'screen'; });
     var target = $('screen-' + screen);
     if (target) target.className = 'screen active';
@@ -212,6 +213,7 @@
   }
 
   function renderHub() {
+    nativeCall('stopReading');
     state.round = null;
     state.awaiting = false;
     state.reviewed = false;
@@ -332,7 +334,15 @@
       state.awaiting = false; state.reviewed = false;
       if (result.studyPhase === 'memorize' && Array.isArray(result.studyCards) && result.studyCards.length > 0) {
         state.round = result;
-        state.cardIndex = 0;
+        var nextIdx = -1;
+        for (var ci = 0; ci < result.studyCards.length; ci++) {
+          if (!result.studyCards[ci].rated) { nextIdx = ci; break; }
+        }
+        if (nextIdx < 0) {
+          if (result.focus === 'memorize') { finishFlashcards(result.studyCards.length); return; }
+          nextIdx = 0;
+        }
+        state.cardIndex = nextIdx;
         state.cardRevealed = false;
         show('quiz');
         renderStudyCard();
@@ -570,6 +580,7 @@
   }
 
   function finishFlashcards(count) {
+    nativeCall('stopReading');
     state.round = null;
     clearRound();
     loadState();
@@ -802,6 +813,10 @@
         : (result.correctIndices || []).map(function (i) { return formatSpokenOption(item, i); }).join('，');
       if (spokenAnswer) nativeCall('readInLanguage', ['正确答案：' + spokenAnswer, item.language || '']);
     }
+    var fbRead = $('fbReadAloud');
+    if (fbRead) {
+      fbRead.style.display = canRead() ? '' : 'none';
+    }
     var go = $('fbNext');
     state.feedbackUntil = Date.now() + ((result.status && result.status.feedbackSeconds) || 0) * 1000;
     go.textContent = result.finished ? '查看结果' : '继续';
@@ -892,6 +907,7 @@
     focusDefault();
   }
   function lock(reason) {
+    nativeCall('stopReading');
     if (isPureStudyMode() && reason !== 'settings') { renderHub(); return; }
     state.lockReason = reason;
     show('lock'); state.round = null; clearRound();
@@ -987,10 +1003,22 @@
     try { info = JSON.parse(raw); } catch (e) {}
     if (!info) { nativeCall('openParent'); return; }
     show('pair');
-    if (!info.ip) { $('pairQr').textContent = '请先连接 WiFi'; $('pairUrl').textContent = '暂无局域网地址，学习功能可离线使用'; focusDefault(); return; }
-    var url = 'http://' + info.ip + ':' + info.port + '/admin/';
-    $('pairUrl').textContent = url;
-    var qr = window.qrcode(0, 'M'); qr.addData(url); qr.make(); $('pairQr').innerHTML = qr.createImgTag(8, 8);
+    var port = info.port || window.location.port || 8080;
+    var localUrl = 'http://127.0.0.1:' + port + '/admin/';
+    var lanUrl = info.ip ? ('http://' + info.ip + ':' + port + '/admin/') : '';
+    var displayUrl = lanUrl || localUrl;
+    state.pairUrl = displayUrl;
+    state.pairLocalUrl = localUrl;
+    var urlEl = $('pairUrl');
+    if (urlEl) {
+      urlEl.textContent = displayUrl;
+      if (urlEl.tagName === 'A') urlEl.setAttribute('href', localUrl);
+    }
+    if (!lanUrl) {
+      $('pairQr').textContent = '未连接 WiFi，可在本机直接打开管理面板';
+    } else {
+      var qr = window.qrcode(0, 'M'); qr.addData(lanUrl); qr.make(); $('pairQr').innerHTML = qr.createImgTag(8, 8);
+    }
     focusDefault();
   }
   // 深色 / 浅色 / 跟随系统（电视系统的深色模式设置）
@@ -1213,6 +1241,18 @@
       }, 180000);
       nativeCall('askSettingsPassword');
     }
+    if (action === 'open-local-admin') {
+      window.location.href = state.pairLocalUrl || '/admin/';
+      return;
+    }
+    if (action === 'copy-pair-url') {
+      var copyTarget = state.pairUrl || state.pairLocalUrl || '';
+      if (!copyTarget) { toast('暂无可复制的地址'); return; }
+      var copied = nativeCall('copyText', [copyTarget]);
+      if (copied === true) toast('已复制地址：' + copyTarget);
+      else toast('复制失败，请手动输入地址');
+      return;
+    }
     if (action === 'permissions' || action === 'password') nativeCall(action === 'permissions' ? 'openPermissions' : 'changePassword');
     if (action === 'clear-drawing') { state.draft.drawing = ''; renderQuestion(); }
     if (action === 'watch-lesson') nativeCall('watchLesson');
@@ -1329,7 +1369,7 @@
           var now = Date.now(); upTaps = now - lastUpTap < 900 ? upTaps + 1 : 1; lastUpTap = now;
           if (upTaps >= 5) { upTaps = 0; nativeCall('openParent'); }
         } else if (!event.repeat) upTaps = 0;
-      } else if (event.keyCode === 13) { if (!event.repeat) activate(); } else return;
+      } else if (event.keyCode === 13 || event.keyCode === 23) { if (!event.repeat) activate(); } else return;
       event.preventDefault();
     });
     var info = nativeCall('deviceInfo');
@@ -1470,7 +1510,11 @@
     move: move,
     select: function () { activate(); },
     back: function () {
-      if (state.screen === 'quiz' && isHubAvailable()) { renderHub(); return; }
+      if (state.screen === 'pair') { nativeCall('backToQuiz'); return; }
+      if ((state.screen === 'quiz' || (state.screen === 'lock' && state.lockReason !== 'settings')) && isHubAvailable()) {
+        renderHub();
+        return;
+      }
       if (isPureStudyMode() || state.learning.canExit === true) nativeCall('exitToLauncher');
       else if (nativeCall('navigationBlocked') !== true) window.SOTV_NAVIGATION_BLOCKED();
     },

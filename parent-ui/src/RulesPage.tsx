@@ -541,7 +541,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                   <FieldContent>
                     <FieldTitle>玩法</FieldTitle>
                     <FieldDescription className="text-xs leading-5">
-                      按组闯关：答完一组结算；连续答对：连对 N 题达标；答对指定题数：累计答对 N 题达标
+                      按组闯关：答完一组结算；连续答对：连对 N 题达标；自由练习：不计解锁，随时刷题；答对指定题数：累计答对 N 题达标
                     </FieldDescription>
                   </FieldContent>
                   <Controller
@@ -930,6 +930,24 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                   </Field>
                   <Field orientation="responsive" className="py-3.5">
                     <FieldContent>
+                      <FieldTitle>全天管控</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        开启后全天按时间规则执行；关闭后可在下方每周时段表自定义
+                      </FieldDescription>
+                    </FieldContent>
+                    {toggle('allDay')}
+                  </Field>
+                  {!c.allDay && (
+                    <WeekSchedule
+                      value={c.weekSlots}
+                      onChange={v => change('weekSlots', v)}
+                      holidayMode={c.holidayMode || 'sunday'}
+                      onHolidayMode={v => change('holidayMode', v)}
+                      scheduleMode={c.scheduleMode || 'allow'}
+                    />
+                  )}
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
                       <FieldTitle>强制休息</FieldTitle>
                       <FieldDescription className="text-xs leading-5">
                         关屏、答题不计时，重启不能跳过
@@ -955,39 +973,12 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                   )}
                   <Field orientation="responsive" className="py-3.5">
                     <FieldContent>
-                      <FieldTitle>按流量判断是否在播放</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">
-                        有的电视识别不到正在播放的视频。打开后，只要有声音、同时网络有明显下载，就当作在看视频
-                      </FieldDescription>
-                    </FieldContent>
-                    {toggle('trafficAssistEnabled')}
-                  </Field>
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
-                      <FieldTitle>保留后台空窗口</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">
-                        部分小米电视会清理后台窗口，导致计时中断。计时不稳定时可以关掉它试试
-                      </FieldDescription>
-                    </FieldContent>
-                    {toggle('backgroundAnchorEnabled')}
-                  </Field>
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
                       <FieldTitle>管控期间不允许进系统设置与应用管理</FieldTitle>
                       <FieldDescription className="text-xs leading-5">
                         开启后（默认开启），管控、可用时长、临时解锁及自由时段均拦截系统设置与应用管理，防止从设置卸载；家长可在拦截页输管理密码临时进入 2 分钟。需开启无障碍或使用情况访问权限
                       </FieldDescription>
                     </FieldContent>
                     {toggle('blockSettingsDuringControl')}
-                  </Field>
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
-                      <FieldTitle>强制使用全屏学习页</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">
-                        适合悬浮窗被视频遮挡的电视（如海信 VIDAA）
-                      </FieldDescription>
-                    </FieldContent>
-                    {toggle('forceFullscreenGate')}
                   </Field>
                   <Field orientation="responsive" className="py-3.5">
                     <FieldContent>
@@ -1007,7 +998,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                       {!!(c.watchWhitelist && c.watchWhitelist.length > 0) &&
                         device.data?.monitor &&
                         !device.data.monitor.accessibility &&
-                        !device.data.monitor.usageAccess && (
+                        !device.data.monitor.usage && (
                           <p className="mt-1.5 text-xs leading-5 text-amber-600 dark:text-amber-400">
                             ⚠ 当前设备未开启「使用情况访问」和「无障碍服务」，系统无法识别正在运行的应用，白名单暂不会生效；请到「设置 → 设备」开启其中任意一项。
                           </p>
@@ -1024,39 +1015,59 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                       )}
                     />
                   </Field>
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
-                      <FieldTitle>时区</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">
-                        可用时段、全天可用和「今天」的重置都按这个时区算。
-                        {!c.timezone && device.data?.timezone
-                          ? `设备当前：${device.data.timezone}`
-                          : '人在国外或设备时间固定在国内时区时改这里。'}
-                      </FieldDescription>
-                    </FieldContent>
-                    <Choice
-                      value={c.timezone || 'device'}
-                      onChange={v => change('timezone', v === 'device' ? '' : v)}
-                      options={zoneChoices}
-                      label="时区"
-                    />
-                  </Field>
-                  <Field orientation="responsive" className="py-3.5">
-                    <FieldContent>
-                      <FieldTitle>全天管控</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">忽略上面的时段设置</FieldDescription>
-                    </FieldContent>
-                    {toggle('allDay')}
-                  </Field>
-                  {!c.allDay && (
-                    <WeekSchedule
-                      value={c.weekSlots}
-                      onChange={v => change('weekSlots', v)}
-                      holidayMode={c.holidayMode || 'sunday'}
-                      onHolidayMode={v => change('holidayMode', v)}
-                    />
-                  )}
                 </FieldGroup>
+                <details className="group border-t border-border/60">
+                  <summary className="flex cursor-pointer list-none items-center gap-1.5 py-3.5 text-xs text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+                    <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
+                    高级排障选项（流量判断、防遮挡、时区等）
+                  </summary>
+                  <FieldGroup className={fieldGroup}>
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>按流量判断是否在播放</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">
+                          有的电视识别不到正在播放的视频。打开后，只要有声音、同时网络有明显下载，就当作在看视频
+                        </FieldDescription>
+                      </FieldContent>
+                      {toggle('trafficAssistEnabled')}
+                    </Field>
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>保留后台空窗口</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">
+                          部分小米电视会清理后台窗口，导致计时中断。计时不稳定时可以关掉它试试
+                        </FieldDescription>
+                      </FieldContent>
+                      {toggle('backgroundAnchorEnabled')}
+                    </Field>
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>强制使用全屏学习页</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">
+                          适合悬浮窗被视频遮挡的电视（如海信 VIDAA）
+                        </FieldDescription>
+                      </FieldContent>
+                      {toggle('forceFullscreenGate')}
+                    </Field>
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>时区</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">
+                          可用时段、全天可用和「今天」的重置都按这个时区算。
+                          {!c.timezone && device.data?.timezone
+                            ? `设备当前：${device.data.timezone}`
+                            : '人在国外或设备时间固定在国内时区时改这里。'}
+                        </FieldDescription>
+                      </FieldContent>
+                      <Choice
+                        value={c.timezone || 'device'}
+                        onChange={v => change('timezone', v === 'device' ? '' : v)}
+                        options={zoneChoices}
+                        label="时区"
+                      />
+                    </Field>
+                  </FieldGroup>
+                </details>
               </FieldSet>
             </Panel>
             <Panel

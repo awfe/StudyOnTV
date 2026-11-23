@@ -644,29 +644,32 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     fun deleteChild(id: String): Boolean {
         require(id != DEFAULT_CHILD) { "第一个孩子不能删除，可以改名" }
         val db = writableDatabase
-        db.beginTransaction()
-        try {
-            db.delete("children", "id=?", arrayOf(id))
-            db.delete("kv", "k LIKE ?", arrayOf("child:$id:%"))
-            db.delete("events", "child=?", arrayOf(id))
-            db.delete("question_progress", "child=?", arrayOf(id))
-            db.delete("question_stats", "child=?", arrayOf(id))
-            // Android 5+ 自带 SQLite 不支持 JSON_EXTRACT，在 Kotlin 层过滤属于该孩子的批改记录
-            val reviewIds = ArrayList<String>()
-            db.rawQuery("SELECT id,payload FROM reviews", null).use { c ->
-                while (c.moveToNext()) {
-                    val rid = c.getString(0) ?: continue
-                    val payload = c.getString(1) ?: continue
-                    val owner = try { JSONObject(payload).optString("child", DEFAULT_CHILD) } catch (_: Exception) { DEFAULT_CHILD }
-                    if (owner == id) reviewIds.add(rid)
+        // 统一锁顺序：永远先 childLock、再 SQLite 写事务，避免与 switchChild()/activeChild() 产生 AB-BA 死锁
+        synchronized(childLock) {
+            db.beginTransaction()
+            try {
+                db.delete("children", "id=?", arrayOf(id))
+                db.delete("kv", "k LIKE ?", arrayOf("child:$id:%"))
+                db.delete("events", "child=?", arrayOf(id))
+                db.delete("question_progress", "child=?", arrayOf(id))
+                db.delete("question_stats", "child=?", arrayOf(id))
+                // Android 5+ 自带 SQLite 不支持 JSON_EXTRACT，在 Kotlin 层过滤属于该孩子的批改记录
+                val reviewIds = ArrayList<String>()
+                db.rawQuery("SELECT id,payload FROM reviews", null).use { c ->
+                    while (c.moveToNext()) {
+                        val rid = c.getString(0) ?: continue
+                        val payload = c.getString(1) ?: continue
+                        val owner = try { JSONObject(payload).optString("child", DEFAULT_CHILD) } catch (_: Exception) { DEFAULT_CHILD }
+                        if (owner == id) reviewIds.add(rid)
+                    }
                 }
+                for (rid in reviewIds) db.delete("reviews", "id=?", arrayOf(rid))
+                configCache.remove(id)
+                if (activeChild() == id) switchChild(DEFAULT_CHILD)
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
             }
-            for (rid in reviewIds) db.delete("reviews", "id=?", arrayOf(rid))
-            configCache.remove(id)
-            if (activeChild() == id) switchChild(DEFAULT_CHILD)
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
         }
         if (!db.inTransaction()) pruneMedia()
         return true
@@ -859,6 +862,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             for (i in 0 until urls.length()) {
                 val url = urls.getString(i)
                 require(url.length <= 2048 && (url.startsWith("https://") || url.startsWith("http://"))) { "请使用 HTTP/HTTPS 视频直链" }
+                if (LocalOnlyGuard.enabled) {
+                    require(LocalOnlyGuard.isLocalUrl(url)) { "仅本地隐私版（EU Local-Only）仅允许配置本机或局域网内的公益视频" }
+                }
             }
             next.put("educationalVideos", urls)
         }
@@ -1956,8 +1962,10 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         val existingGrading = try { JSONObject(rawGet("grading_settings", "{}")) } catch (_: Exception) { JSONObject() }
         val existingSpeech = try { JSONObject(rawGet("speech_settings", "{}")) } catch (_: Exception) { JSONObject() }
 
-        db.beginTransaction()
-        try {
+        // 统一锁顺序：永远先 childLock、再 SQLite 写事务，避免与 switchChild()/activeChild() 产生 AB-BA 死锁
+        synchronized(childLock) {
+            db.beginTransaction()
+            try {
             if (replace) {
                 db.delete("children", null, null)
                 db.delete("events", null, null)
@@ -2126,10 +2134,11 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             }
 
             configCache.clear()
-            synchronized(childLock) { cachedChild = null }
+            cachedChild = null
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
+        }
         }
         if (!db.inTransaction()) pruneMedia()
         val totalQ = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }

@@ -106,7 +106,11 @@ object Foreground {
 
     /** 最近一个真正的前台应用（不含系统临时窗口），供「解锁后回到原画面」使用 */
     fun lastReal(): String? = lastRealPackage?.takeUnless { it == selfPackage || (it == lastPackage && isTransient(it)) }
-    fun hasResumedActivity(): Boolean = ownActivity?.get() != null
+    fun hasResumedActivity(): Boolean {
+        val activity = ownActivity?.get() ?: return false
+        if (Build.VERSION.SDK_INT >= 24 && activity.isInMultiWindowMode) return false
+        return true
+    }
     fun resumedActivity(): android.app.Activity? = ownActivity?.get()
     fun learningActivity(): android.app.Activity? = ownActivity?.get()?.takeIf { it is MainActivity }
 

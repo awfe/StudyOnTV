@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
+import android.view.KeyEvent
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -18,6 +19,8 @@ class ParentActivity : Activity() {
     /** Read by the key filter: no password/preferences lookup may happen in that callback. */
     val requiresParentVerification: Boolean get() = !initialSetup && !verified
     private var web: WebView? = null
+    private var showingWeb = false
+    private val remote = RemoteKeys { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,6 +35,7 @@ class ParentActivity : Activity() {
     fun changePassword() = form(true, true)
 
     private fun form(setup: Boolean, changing: Boolean = false) {
+        showingWeb = false
         val tv = DeviceBridge.isTv(this)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -118,8 +122,28 @@ class ParentActivity : Activity() {
         web = WebShell(this).create(Prefs.localBase(this) + "#/pair").also {
             it.addJavascriptInterface(DeviceBridge(this, true, it), "SOTVNative")
         }
+        showingWeb = true
         setContentView(web)
         web?.requestFocus()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (MainActivity.isPowerKey(event.keyCode)) return super.dispatchKeyEvent(event)
+        val view = web
+        if (showingWeb && view != null) {
+            val url = view.url.orEmpty()
+            if (url.contains("/admin")) {
+                if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN && view.canGoBack()) {
+                    view.goBack()
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
+            }
+            if (DeviceBridge.isTv(this)) {
+                return remote.handle(view, event) || super.dispatchKeyEvent(event)
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private var stoppedAt = 0L
@@ -134,12 +158,14 @@ class ParentActivity : Activity() {
         // 去系统权限页转一圈回来不用重新输密码；离开超过 1 分钟才重新验证
         if (verified && stoppedAt > 0 && android.os.SystemClock.elapsedRealtime() - stoppedAt > 60000) {
             verified = false
+            showingWeb = false
             web?.destroy(); web = null
             form(false)
         }
     }
 
     override fun onDestroy() {
+        showingWeb = false
         web?.destroy(); web = null
         super.onDestroy()
     }

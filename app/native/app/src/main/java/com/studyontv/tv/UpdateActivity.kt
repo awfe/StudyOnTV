@@ -22,6 +22,7 @@ class UpdateActivity : Activity() {
     private var sha256 = ""
     private lateinit var status: TextView
     private var goButton: TextView? = null
+    @Volatile private var installHandedOff = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,11 +89,12 @@ class UpdateActivity : Activity() {
 
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         lateinit var go: android.widget.Button
-        go = TvUi.button(this, if (ApkInstaller.alreadyDownloaded(this, 0)) "开始安装" else "立即更新", true) {
+        go = TvUi.button(this, "立即更新", true) {
             startUpdate(url, go, progress)
         }
         go.textSize = if (tv) 21f else 18f
         goButton = go
+        refreshPrimaryButtonLabel(go)
         buttons.addView(go, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(if (tv) 62 else 54)))
 
         val secondary = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -137,6 +139,8 @@ class UpdateActivity : Activity() {
         if (!::status.isInitialized) return
         val error = Prefs.updateInstallError(this)
         if (error.isNotEmpty()) {
+            installHandedOff = false
+            Prefs.setUpdateInProgress(this, false)
             status.text = "$error。可以点「立即更新」再试一次，或用「手动下载」装。"
             goButton?.isEnabled = true
             goButton?.text = "重试安装"
@@ -144,9 +148,27 @@ class UpdateActivity : Activity() {
             goButton?.text = "去允许安装应用"
             status.text = "这套电视系统默认禁止应用自己安装更新，需要先允许「题了个题」安装应用"
         } else if (goButton?.text?.toString() == "去允许安装应用") {
-            goButton?.text = if (ApkInstaller.alreadyDownloaded(this, 0)) "开始安装" else "立即更新"
+            goButton?.let { refreshPrimaryButtonLabel(it) }
             status.text = "下载后覆盖安装，题库和设置不会丢"
         }
+    }
+
+    override fun onDestroy() {
+        if (!installHandedOff) {
+            Prefs.setUpdateInProgress(this, false)
+        }
+        super.onDestroy()
+    }
+
+    private fun refreshPrimaryButtonLabel(button: TextView) {
+        Thread {
+            val downloaded = try { ApkInstaller.alreadyDownloaded(this, 0) } catch (_: Exception) { false }
+            runOnUiThread {
+                if (!isFinishing && button.isEnabled && (button.text == "立即更新" || button.text == "去允许安装应用")) {
+                    button.text = if (downloaded) "开始安装" else "立即更新"
+                }
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     private fun label(text: String, size: Float, color: Int, bottomMarginDp: Int,
@@ -180,36 +202,71 @@ class UpdateActivity : Activity() {
             return
         }
 
-        val ready = ApkInstaller.apkFile(this)
-        if (ApkInstaller.alreadyDownloaded(this, 0)) {
-            Prefs.setUpdateInProgress(this, true)
-            if (ApkInstaller.install(this, ready)) return
-            button.text = "安装失败，重试"
-            status.text = ApkInstaller.lastError.ifEmpty { "系统没有接受这次安装" }
-            return
-        }
-
+        installHandedOff = false
         Prefs.setUpdateInProgress(this, true)
         button.isEnabled = false
-        button.text = "下载中 0%"
-        progress?.visibility = View.VISIBLE
+        button.text = "准备安装…"
         Thread {
-            val file = ApkInstaller.download(this, url, sha256, { source -> runOnUiThread { status.text = "下载线路：$source" } }) { percent ->
+            try {
+                val ready = ApkInstaller.apkFile(this)
+                if (ApkInstaller.alreadyDownloaded(this, 0)) {
+                    val installed = ApkInstaller.install(this, ready)
+                    if (installed) {
+                        installHandedOff = true
+                    } else {
+                        Prefs.setUpdateInProgress(this, false)
+                    }
+                    runOnUiThread {
+                        if (installed) {
+                            button.text = "正在安装…"
+                        } else {
+                            button.isEnabled = true
+                            button.text = "安装失败，重试"
+                            status.text = ApkInstaller.lastError.ifEmpty { "系统没有接受这次安装" }
+                            button.requestFocus()
+                        }
+                    }
+                    return@Thread
+                }
+
                 runOnUiThread {
-                    button.text = if (percent < 0) "下载中…" else if (percent < 100) "下载中 $percent%" else "正在安装…"
-                    if (percent >= 0) progress?.progress = percent.coerceIn(0, 100)
+                    button.text = "下载中 0%"
+                    progress?.visibility = View.VISIBLE
                 }
-            }
-            runOnUiThread {
-                if (file != null && ApkInstaller.install(this, file)) {
-                    button.text = "正在安装…"
+                val file = ApkInstaller.download(this, url, sha256, { source -> runOnUiThread { status.text = "下载线路：$source" } }) { percent ->
+                    runOnUiThread {
+                        button.text = if (percent < 0) "下载中…" else if (percent < 100) "下载中 $percent%" else "正在准备安装…"
+                        if (percent >= 0) progress?.progress = percent.coerceIn(0, 100)
+                    }
+                }
+                val installed = if (file != null) ApkInstaller.install(this, file) else false
+                if (installed) {
+                    installHandedOff = true
                 } else {
-                    button.isEnabled = true
-                    button.text = "下载失败，重试"
-                    status.text = (ApkInstaller.lastError.ifEmpty { "下载失败，请检查网络" }) + "。也可以点「手动下载」到蒲公英安装。"
-                    progress?.visibility = View.GONE
+                    Prefs.setUpdateInProgress(this, false)
                 }
-                button.requestFocus()
+                runOnUiThread {
+                    if (installed) {
+                        button.text = "正在安装…"
+                    } else {
+                        button.isEnabled = true
+                        button.text = if (file == null) "下载失败，重试" else "安装失败，重试"
+                        status.text = (ApkInstaller.lastError.ifEmpty { if (file == null) "下载失败，请检查网络" else "系统没有接受这次安装" }) +
+                            "。也可以点「手动下载」到蒲公英安装。"
+                        progress?.visibility = View.GONE
+                    }
+                    button.requestFocus()
+                }
+            } catch (e: Exception) {
+                Prefs.setUpdateInProgress(this, false)
+                Diag.error("Update", "update task failed", e)
+                runOnUiThread {
+                    button.isEnabled = true
+                    button.text = "安装失败，重试"
+                    status.text = "更新准备失败：${e.message ?: e.javaClass.simpleName}"
+                    progress?.visibility = View.GONE
+                    button.requestFocus()
+                }
             }
         }.apply { isDaemon = true }.start()
     }

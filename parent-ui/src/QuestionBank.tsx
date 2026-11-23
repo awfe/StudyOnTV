@@ -237,6 +237,18 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
               <Plus />
               新增题目
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setMarketOpen(true)}>
+              <Globe />
+              在线题库市场
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setImporting(true)}>
+              <Upload />
+              导入 Word/PDF/JSON
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setAiOpen(true)}>
+              <Sparkles />
+              AI 出题
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="icon" className="size-8" aria-label="更多题库操作">
@@ -244,20 +256,6 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-44">
-                <DropdownMenuLabel>添加题目</DropdownMenuLabel>
-                <DropdownMenuItem onSelect={() => setImporting(true)}>
-                  <Upload />
-                  导入 JSON / 文档
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setAiOpen(true)}>
-                  <Sparkles />
-                  AI 批量出题
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setMarketOpen(true)}>
-                  <Globe />
-                  在线题库市场
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
                 <DropdownMenuLabel>导出</DropdownMenuLabel>
                 <DropdownMenuItem disabled={exporting} onSelect={exportBank}>
                   <Download />
@@ -336,6 +334,8 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
         onReset={reset}
         onCreate={() => startEdit()}
         onOpenAi={() => setAiOpen(true)}
+        onOpenMarket={() => setMarketOpen(true)}
+        onOpenImport={() => setImporting(true)}
       />
 
       <QuestionDetailSheet

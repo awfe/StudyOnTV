@@ -175,6 +175,11 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
                   <ItemDescription className="text-xs">
                     失败时孩子可以先跳过，家长也可以手动批改。
                   </ItemDescription>
+                  {!aiConfigured && (
+                    <p className="mt-1.5 text-xs leading-5 text-amber-600 dark:text-amber-400">
+                      尚未配置模型 API，当前「AI 自动批改」暂时无法保存。请先点击右侧「去设置」填写模型与密钥后再切换回来。
+                    </p>
+                  )}
                 </ItemContent>
                 <div className="flex flex-wrap items-center justify-end gap-2 max-sm:basis-full">
                   <Badge variant={aiConfigured ? 'secondary' : 'outline'}>
@@ -230,7 +235,7 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
                   <ClipboardCheck />
                 </EmptyMedia>
                 <EmptyTitle>暂无待批作答</EmptyTitle>
-                <EmptyDescription>孩子提交后会自动出现在这里。</EmptyDescription>
+                <EmptyDescription>仅主观题与手写作答需要批改，孩子提交后会自动出现在这里（客观题自动判分）。</EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (

@@ -74,12 +74,24 @@ class TimePolicy(private val store: LocalStore, private val boot: () -> Int) {
         val elapsed = SystemClock.elapsedRealtime()
         val wasAwake = store.get("boot_free_awake") == "1"
         val newBoot = store.get("boot_free_boot") != boot().toString() || elapsed < n("boot_free_elapsed")
-        if (awake && (newBoot || !wasAwake)) {
-            put("boot_quota_ms", config.optLong("bootFreeMinutes") * 60000)
-            store.set("boot_free_boot", boot().toString())
+        if (awake) {
+            val sleepAt = n("boot_free_sleep_at")
+            val sleptLongEnough = !wasAwake && sleepAt > 0L && elapsed - sleepAt >= MIN_BOOT_FREE_OFF_MS
+            if (newBoot || sleptLongEnough) {
+                put("boot_quota_ms", config.optLong("bootFreeMinutes") * 60000)
+                store.set("boot_free_boot", boot().toString())
+            }
+            if (!wasAwake) put("boot_free_sleep_at", 0L)
+        } else if (wasAwake || n("boot_free_sleep_at") == 0L) {
+            put("boot_free_sleep_at", elapsed)
         }
         store.set("boot_free_awake", if (awake) "1" else "0")
         put("boot_free_elapsed", elapsed)
+    }
+
+    companion object {
+        /** 息屏至少 5 分钟后再唤醒才重置开机免费时长，防止快速息屏/亮屏刷额度 */
+        const val MIN_BOOT_FREE_OFF_MS = 5 * 60 * 1000L
     }
     fun adjust(minutes: Int, config: JSONObject) {
         require(minutes != 0 && minutes in -480..480) { "调整时长需要为 -480 到 480 分钟，且不能为 0" }

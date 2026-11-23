@@ -333,7 +333,8 @@ object GradingService {
         val system = """你是认真出题的中小学老师。只返回 JSON，不要 Markdown 代码块，不要解释。
 格式：{\"items\":[{\"type\":\"single\",\"q\":\"题干\",\"a\":[\"选项\",\"选项\"],\"k\":1,\"difficulty\":2,\"tip\":\"解析\"}]}
 type 只能是：single（单选，答案用 k 表示正确选项下标）、multiple（多选，用 correctIndices 数组）、boolean（判断，a 固定为 [\"正确\",\"错误\"]，k 为 0 或 1）、text（填空，用 answers 数组给出可接受答案）、subjective（主观题，用 modelAnswer 和 rubric）。
-每题必须有 q、type、difficulty（1-5）和完整答案；解析放在 tip，没有就填空字符串。题干和选项不要使用 HTML。"""
+每题必须有 q、type、difficulty（1-5）和完整答案；解析放在 tip，没有就填空字符串。题干和选项不要使用 HTML。
+涉及数学、物理、化学公式时，优先使用标准 LaTeX 语法（行内公式用 $...$，独立公式用 $$...$$，JSON 字符串中反斜杠需双写如 \\frac{1}{2}）；填空题 answers 仍给出学生可直接键入的纯文本答案（如 "1/2"、"3"）。"""
 
         val weakPrompt = if (weakSamples.isEmpty()) "" else buildString {
             append("\n以下是孩子近期出错的原题样本，请深入识别每题背后的核心概念与易错陷阱，")

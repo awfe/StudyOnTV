@@ -52,7 +52,8 @@ object SpeechReader {
     private val synthCache = object : LinkedHashMap<String, ByteArray>(4, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?): Boolean = size > 6
     }
-    /** 云端 WAV 走 AudioTrack 播放（华为等设备的 MediaPlayer 播不了，用户反馈），stopNow 时释放 */
+    /** 云端 WAV 走 AudioTrack 播放（华为等设备的 MediaPlayer 播不了，用户反馈），stopNow 暂停打断、playPcm finally 唯一负责释放 */
+    private val trackLock = Any()
     @Volatile private var track: AudioTrack? = null
     private var audioFile: File? = null
     private var system: TextToSpeech? = null
@@ -75,10 +76,11 @@ object SpeechReader {
     /** 桥的回报回调（只在一次朗读 / 播放期间持有，stopNow 释放，避免长期抓住 WebView） */
     private var notice: ((JSONObject) -> Unit)? = null
     private var cachedContext: Context? = null
-    private var currentText = ""
-    private var currentLanguage = ""
-    private var lastUtteranceId = ""
-    private var retriedDefault = false
+    @Volatile private var currentText = ""
+    @Volatile private var currentLanguage = ""
+    @Volatile private var lastUtteranceId = ""
+    @Volatile private var retriedDefault = false
+    @Volatile private var retriedSpeakError = false
     // 走媒体流而不是无障碍流：华为智慧屏、TCL 这类电视上无障碍流常常没有输出，
     // 表现就是「点了朗读没声音」；媒体流一定会经过电视的扬声器 / HDMI。
     private val attributes get() = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
@@ -361,13 +363,13 @@ object SpeechReader {
     private fun stopNow(stopSystem: Boolean = true) {
         generation++; pending = null
         if (stopSystem) system?.stop()
-        track?.let {
-            try { it.pause(); it.flush() } catch (_: Exception) { }
-            try { it.release() } catch (_: Exception) { }
+        synchronized(trackLock) {
+            track?.let {
+                try { it.pause(); it.flush() } catch (_: Exception) { }
+            }
         }
-        track = null
         player?.release(); player = null; audioFile?.delete(); audioFile = null
-        markSpeaking(false); currentText = ""; currentLanguage = ""; lastUtteranceId = ""; retriedDefault = false
+        markSpeaking(false); currentText = ""; currentLanguage = ""; lastUtteranceId = ""; retriedDefault = false; retriedSpeakError = false
         notice = null
     }
 
@@ -381,10 +383,10 @@ object SpeechReader {
         @Deprecated("Deprecated in Java")
         override fun onError(utteranceId: String?) = onError(utteranceId, TextToSpeech.ERROR)
         override fun onError(utteranceId: String?, errorCode: Int) {
-            markSpeaking(false)
             Diag.warn("Speech", "utterance error id=$utteranceId code=$errorCode language=${currentLanguage.ifEmpty { "-" }}")
             val request = utteranceId?.split("-")?.getOrNull(1)?.toIntOrNull() ?: return
             if (request != generation) return
+            markSpeaking(false)
             val text = currentText; val context = cachedContext
             val fallback = defaultLanguage()
             if (!retriedDefault && context != null && text.isNotEmpty() && currentLanguage != fallback) {
@@ -450,7 +452,8 @@ object SpeechReader {
             val rate = currentSettings().optDouble("speechRate", 1.0).takeIf { it.isFinite() }?.coerceIn(0.7, 1.5) ?: 1.0
             engine.setSpeechRate(rate.toFloat())
         } catch (_: Exception) { }
-        currentText = text; currentLanguage = plan.language; retriedDefault = plan.degraded
+        currentText = text; currentLanguage = plan.language
+        if (plan.degraded) retriedDefault = true
         // 按句子攒到 180 字再排队朗读：电视内置 TTS 引擎读几千字的长句常常中途断掉（用户反馈「朗读不完整」），
         // 拆成短句用 QUEUE_ADD 串起来更稳，句间停顿也更自然。
         val max = minOf(180, TextToSpeech.getMaxSpeechInputLength())
@@ -462,9 +465,9 @@ object SpeechReader {
                 Diag.warn("Speech", "engine.speak returned ERROR on part $index, reinitializing TTS")
                 try { engine.shutdown() } catch (_: Exception) { }
                 system = null; ready = false
-                if (!retriedDefault) {
-                    retriedDefault = true
-                    systemRead(context, text, language, request, mode)
+                if (!retriedSpeakError) {
+                    retriedSpeakError = true
+                    systemRead(context, text, language, request, mode, cloudError)
                 } else {
                     notify(false, mode, "speak-error", plan.requested, plan.language, plan.degraded,
                         "系统语音引擎无响应，请重试或改用云端语音")
@@ -782,8 +785,14 @@ object SpeechReader {
                 val minBytes = AudioTrack.getMinBufferSize(pcm.sampleRate, mask, AudioFormat.ENCODING_PCM_16BIT)
                 val created = AudioTrack(attributes, format, maxOf(minBytes, 16 * 1024), AudioTrack.MODE_STREAM,
                     AudioManager.AUDIO_SESSION_ID_GENERATE)
-                audioTrack = created
-                track = created
+                synchronized(trackLock) {
+                    if (request != generation) {
+                        try { created.release() } catch (_: Exception) { }
+                        return@execute
+                    }
+                    audioTrack = created
+                    track = created
+                }
                 markSpeaking(true)
                 created.play()
                 var offset = 0
@@ -805,10 +814,12 @@ object SpeechReader {
                 Diag.warn("Speech", "pcm playback failed $message")
                 main.post { if (request == generation) onError(message) }
             } finally {
-                markSpeaking(false)
-                if (track === audioTrack) track = null
-                try { audioTrack?.pause(); audioTrack?.flush() } catch (_: Exception) { }
-                try { audioTrack?.release() } catch (_: Exception) { }
+                if (request == generation) markSpeaking(false)
+                synchronized(trackLock) {
+                    if (track === audioTrack) track = null
+                    try { audioTrack?.pause(); audioTrack?.flush() } catch (_: Exception) { }
+                    try { audioTrack?.release() } catch (_: Exception) { }
+                }
             }
         }
     }
