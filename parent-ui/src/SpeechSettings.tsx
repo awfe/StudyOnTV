@@ -63,6 +63,8 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
  const errors=validate(form),validationError=Object.values(errors)[0]||'';
  const signature=JSON.stringify(form),latestSignature=useRef(signature);
  latestSignature.current=signature;
+ const dirtyRef=useRef(dirty);
+ dirtyRef.current=dirty;
  // 刷新设置时保留输入框里已经填的 Key：自动保存成功后如果把它擦空，输入慢一点就会被擦掉一半，看起来像「保存不了」
  useEffect(()=>{if(query.data&&!dirty)setForm((old:any)=>({...query.data,azureKey:old.azureKey,aliyunSecret:old.aliyunSecret,deepseekKey:old.deepseekKey}));},[query.data,dirty]);
  const change=(key:string,value:any)=>{setDirty(true);setSaved(false);setSaveError('');setForm((old:any)=>({...old,[key]:value}));};
@@ -91,7 +93,7 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
   }catch(e:any){setProbe((old:any)=>({...old,hint:'打开安装页面失败：'+(e?.message||'请到系统设置里安装')}));}
  };
  const save=useMutation({
-  mutationFn:(body:any)=>api('/api/speech','PUT',body),
+  mutationFn:(body:any)=>{const {clearKeys:_c,...payload}=body||{};return api('/api/speech','PUT',payload);},
   onMutate:()=>setSaveError(''),
   onSuccess:(r,body)=>{
    client.setQueryData(['speech',sessionId],r);
@@ -99,13 +101,31 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
   },
   onError:(e:any,body)=>{setSaveError(e.message||'自动保存失败，请重试');setFailedSignature(JSON.stringify(body));}
  });
+ const clearKeys=useMutation({
+  mutationFn:()=>api('/api/speech','PUT',{clearKeys:true}),
+  onMutate:()=>{
+   setSaveError('');setSaved(false);setFailedSignature('');setDirty(false);
+   setForm((old:any)=>{const {clearKeys:_c,...rest}=old||{};return {...rest,azureKey:'',aliyunSecret:'',deepseekKey:''};});
+  },
+  onSuccess:r=>{
+   client.setQueryData(['speech',sessionId],r);
+   if(!dirtyRef.current){
+    setForm((old:any)=>({...r,azureKey:old.azureKey,aliyunSecret:old.aliyunSecret,deepseekKey:old.deepseekKey}));
+    setSaved(true);
+   }else{
+    setForm((old:any)=>({...old,azureKeySet:r.azureKeySet,aliyunSecretSet:r.aliyunSecretSet,deepseekKeySet:r.deepseekKeySet,deepseekInherited:r.deepseekInherited}));
+   }
+  },
+  onError:(e:any)=>setSaveError(e?.message||'清除密钥失败，请重试'),
+ });
+ const busy=save.isPending||clearKeys.isPending;
  useEffect(()=>{
   // 只有「从没读到过设置」时才禁止保存：读到过之后哪怕某次刷新失败，也已经有可信的表单值
-  if(!dirty||validationError||!query.data||save.isPending||failedSignature===signature)return;
+  if(!dirty||validationError||!query.data||busy||failedSignature===signature)return;
   const timer=window.setTimeout(()=>save.mutate(form),700);
   return()=>window.clearTimeout(timer);
- },[dirty,validationError,query.data,save.isPending,failedSignature,signature]);
- const saveState:SaveState=save.isPending?'saving':saveError?'error':dirty?(validationError?'error':'pending'):saved?'saved':'idle';
+ },[dirty,validationError,query.data,busy,failedSignature,signature]);
+ const saveState:SaveState=busy?'saving':saveError?'error':dirty?(validationError?'error':'pending'):saved?'saved':'idle';
  const edgeVisible=form.mode==='edge',azureVisible=form.mode==='azure',aliyunVisible=form.mode==='aliyun';
  const deepseekVisible=form.mode==='deepseek';
  const hiddenErrors=Object.entries(errors).filter(([key])=>!((azureFields.includes(key)&&azureVisible)||(aliyunFields.includes(key)&&aliyunVisible)||(deepseekFields.includes(key)&&deepseekVisible)||key==='mode'||key==='recognizeMode'));
@@ -232,11 +252,11 @@ export default function SpeechSettings({sessionId}:{sessionId:number}){
     {((!query.data&&query.isError)||saveError)&&<div className="flex flex-wrap items-center justify-between gap-2 py-3">
      <FieldError>{!query.data?'无法读取朗读设置，暂时不能修改。':saveError}</FieldError>
      {/* 读不到设置时不能拿默认值去覆盖设备，只能重新拉；存失败则原样重试一次 */}
-     <Button type="button" variant="outline" size="sm" onClick={()=>{setSaveError('');setFailedSignature('');if(!query.data)query.refetch();else save.mutate(form);}}>重试</Button>
+     <Button type="button" variant="outline" size="sm" disabled={busy} onClick={()=>{setSaveError('');setFailedSignature('');if(!query.data)query.refetch();else if(clearKeys.isError&&!dirty)clearKeys.mutate();else save.mutate(form);}}>重试</Button>
     </div>}
    </ItemGroup>
    <div className="flex justify-end gap-2 border-t py-3">
-    <Button type="button" variant="outline" size="sm" disabled={save.isPending} onClick={()=>{if(confirm('清除已保存的朗读服务密钥？')){setDirty(true);setSaved(false);setSaveError('');setFailedSignature('');setForm((old:any)=>({...old,clearKeys:true,azureKey:'',aliyunSecret:'',deepseekKey:''}));}}}>清除密钥</Button>
+    <Button type="button" variant="outline" size="sm" disabled={busy||!query.data} onClick={()=>{if(confirm('清除已保存的朗读服务密钥？'))clearKeys.mutate();}}>{clearKeys.isPending?'清除中…':'清除密钥'}</Button>
    </div>
   </CardContent>
  </Card>

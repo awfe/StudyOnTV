@@ -28,7 +28,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from './api';
-import { defaults, ruleSchema, zoneOptions, type Rules } from './schema';
+import { normalizeRules, ruleSchema, zoneOptions, type Rules } from './schema';
 import TimePoints from './TimePoints';
 import WatchWhitelistField from './WatchWhitelistField';
 import WeekSchedule from './WeekSchedule';
@@ -284,10 +284,22 @@ export function Panel({
   );
 }
 
+const parseVideoLines = (text: string) =>
+  text
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean);
+
 export default function RulesPage({ state, sessionId }: { state: any; sessionId: number }) {
-  const initial = { ...defaults, ...(state?.config || {}) };
+  const initial = normalizeRules(state?.config);
   const form = useForm<Rules>({ resolver: zodResolver(ruleSchema), defaultValues: initial });
   const c = form.watch();
+  const [videoText, setVideoText] = useState(() => (initial.educationalVideos || []).join('\n'));
+  const [videoFocused, setVideoFocused] = useState(false);
+  const videosKey = (c.educationalVideos || []).join('\n');
+  useEffect(() => {
+    if (!videoFocused) setVideoText(videosKey);
+  }, [videosKey, videoFocused]);
   const client = useQueryClient();
   const [tab, setTab] = useState<'task' | 'time' | 'scope' | 'more'>('task');
   const bankMeta = useQuery({
@@ -306,9 +318,11 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
     const list = Array.isArray((c as any)[key]) ? (c as any)[key] : [];
     change(key, list.includes(value) ? list.filter((v: string) => v !== value) : [...list, value]);
   };
+  const configSnapshot = state?.config ? JSON.stringify(state.config) : '';
+  const activeChildId = state?.child?.id ?? '';
   useEffect(() => {
-    if (state?.config && !form.formState.isDirty) form.reset({ ...defaults, ...state.config });
-  }, [state?.config?.version]);
+    if (state?.config && !form.formState.isDirty) form.reset(normalizeRules(state.config));
+  }, [activeChildId, configSnapshot]);
   // 失败后记住失败时的值，避免 isPending 变化触发同一个值反复自动重试（网络断开时每 0.8 秒弹一次错误）。
   const failedSignature = useRef('');
   const validationToast = useRef('');
@@ -317,7 +331,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
     onSuccess: (r, body) => {
       failedSignature.current = '';
       if (JSON.stringify(form.getValues()) === JSON.stringify(body)) {
-        form.reset({ ...defaults, ...r.config });
+        form.reset(normalizeRules(r.config));
       }
       client.invalidateQueries({ queryKey: ['state', sessionId] });
     },
@@ -518,7 +532,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
       </Card>
 
       <Tabs value={tab} onValueChange={value => setTab(value as typeof tab)} className="gap-5">
-        <TabsList className="w-full gap-1">
+        <TabsList className="flex w-full max-w-full flex-nowrap justify-start gap-1 overflow-x-auto sm:justify-center">
           {(
             [
               ['task', '任务与背诵'],
@@ -527,7 +541,12 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
               ['time', supervisionEnabled ? '时间计划' : '时间管控（未启用）'],
             ] as const
           ).map(([id, label]) => (
-            <TabsTrigger key={id} type="button" value={id}>
+            <TabsTrigger
+              key={id}
+              type="button"
+              value={id}
+              className="shrink-0 whitespace-nowrap max-[420px]:px-2 max-[420px]:text-xs"
+            >
               {label}
             </TabsTrigger>
           ))}
@@ -655,16 +674,17 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                           <Textarea
                             aria-label="公益视频直链"
                             rows={4}
-                            value={c.educationalVideos.join('\n')}
-                            onChange={e =>
-                              change(
-                                'educationalVideos',
-                                e.target.value
-                                  .split('\n')
-                                  .map(s => s.trim())
-                                  .filter(Boolean),
-                              )
-                            }
+                            value={videoText}
+                            onFocus={() => setVideoFocused(true)}
+                            onChange={e => {
+                              const raw = e.target.value;
+                              setVideoText(raw);
+                              change('educationalVideos', parseVideoLines(raw));
+                            }}
+                            onBlur={e => {
+                              setVideoFocused(false);
+                              setVideoText(parseVideoLines(e.target.value).join('\n'));
+                            }}
                           />
                         </Field>
                       </>

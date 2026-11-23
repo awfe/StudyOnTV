@@ -109,11 +109,12 @@ const searchEntries:SearchEntry[]=[
  {id:'grading',page:'grading',where:'作答批改',title:'待批改与 AI 批改',keywords:'批改 作业 待批 评分 ai 主观题 手写'},
  {id:'records',page:'records',where:'学情与记录',title:'学情诊断、顽固错题与记忆成熟度',keywords:'学情 记录 成长 统计 进度 正确率 时长 趋势 薄弱项 错题榜'},
 ];
-const searchHits=(query:string)=>{
+const searchHits=(query:string,localOnly=false)=>{
  const q=query.trim().toLowerCase();
  if(!q)return [];
  const words=q.split(/\s+/).filter(Boolean);
  return searchEntries
+  .filter(entry=>!localOnly||entry.section!=='update')
   .map(entry=>{
    const text=(entry.title+' '+entry.keywords+' '+entry.where).toLowerCase();
    return {entry,score:words.every(w=>text.includes(w))?words.filter(w=>entry.title.toLowerCase().includes(w)).length:0,ok:text.includes(q)||words.every(w=>text.includes(w))};
@@ -154,8 +155,8 @@ function App(){const[session,setSession]=useState(()=>restoreSession()?1:0),[nex
 
 function Login({onLogin,theme}:{onLogin:()=>void,theme:ReturnType<typeof useTheme>}){
  const[host,updateHost]=useState(getHost()),[secret,setSecret]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const[visible,setVisible]=useState(false),[accepted,setAccepted]=useState(true),[crashReports,setCrashReports]=useState(true),[docType,setDocType]=useState<'terms'|'privacy'|null>(null);
- async function submit(e:any){e.preventDefault();if(busy)return;setError('');if(!accepted)return setError('请先同意使用说明和隐私条款');if(!secret)return setError('请输入管理密码');if(secret.length<6)return setError('管理密码至少 6 位');setBusy(true);try{setHost(host);const result=await api('/api/auth','POST',{passphrase:secret,remember:true});setToken(result.token);saveSession(getHost(),result.token);api('/api/device/crash','PUT',{consent:crashReports}).catch(()=>{});setSecret('');onLogin();}catch(e:any){setError(e.message==='Failed to fetch'?'无法连接设备，请检查设备地址和 WiFi':e.message);}finally{setBusy(false);}}
+ const[visible,setVisible]=useState(false),[accepted,setAccepted]=useState(true),[crashReports,setCrashReports]=useState(false),[crashTouched,setCrashTouched]=useState(false),[docType,setDocType]=useState<'terms'|'privacy'|null>(null);
+ async function submit(e:any){e.preventDefault();if(busy)return;setError('');if(!accepted)return setError('请先同意使用说明和隐私条款');if(!secret)return setError('请输入管理密码');if(secret.length<6)return setError('管理密码至少 6 位');setBusy(true);try{setHost(host);const result=await api('/api/auth','POST',{passphrase:secret,remember:true});setToken(result.token);saveSession(getHost(),result.token);if(crashTouched&&!result?.localOnly){const deviceInfo=await api('/api/device').catch(()=>null);if(!deviceInfo?.localOnly){await api('/api/device/crash','PUT',{consent:crashReports}).catch(()=>{});}}setSecret('');onLogin();}catch(e:any){setError(e.message==='Failed to fetch'?'无法连接设备，请检查设备地址和 WiFi':e.message);}finally{setBusy(false);}}
  return <main className="relative min-h-svh overflow-hidden bg-background">
   <div aria-hidden className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,color-mix(in_oklab,var(--border)_45%,transparent)_1px,transparent_1px),linear-gradient(to_bottom,color-mix(in_oklab,var(--border)_45%,transparent)_1px,transparent_1px)] bg-[size:56px_56px] [mask-image:linear-gradient(to_bottom,black,transparent_78%)]"/>
   <header className="relative z-10 mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 md:px-6"><div className="flex items-center gap-2 text-sm font-semibold"><span className="brand-icon size-8"><Leaf className="size-4"/></span><span>题了个题</span></div><ThemeSwitch {...theme}/></header>
@@ -198,7 +199,7 @@ function Login({onLogin,theme}:{onLogin:()=>void,theme:ReturnType<typeof useThem
          </FieldContent>
         </Field>
         <Field orientation="horizontal" className="items-start gap-3">
-         <Checkbox id="crash-reports" className="mt-0.5" checked={crashReports} onCheckedChange={value=>setCrashReports(value===true)}/>
+         <Checkbox id="crash-reports" className="mt-0.5" checked={crashReports} onCheckedChange={value=>{setCrashReports(value===true);setCrashTouched(true);}}/>
          <FieldContent><FieldLabel htmlFor="crash-reports" className="font-normal text-muted-foreground">参与软件体验提升计划</FieldLabel></FieldContent>
         </Field>
        </FieldGroup>
@@ -267,9 +268,9 @@ function SettingsPage({section,go,sessionId,state,logout,localOnly}:{section:Sec
  </Tabs>;}
 
 /** 面板全局搜索：设置分区、其它页面和常用功能都在里面，选中后跳过去并按需滚动到具体设置项 */
-function GlobalSearch({go}:{go:(p:PageId,s?:SectionId)=>void}){
+function GlobalSearch({go,localOnly}:{go:(p:PageId,s?:SectionId)=>void,localOnly:boolean}){
  const[open,setOpen]=useState(false),[query,setQuery]=useState('');
- const hits=searchHits(query);
+ const hits=searchHits(query,localOnly);
  const jump=(entry:SearchEntry)=>{
   setOpen(false);setQuery('');
   go(entry.page,entry.section);
@@ -343,7 +344,7 @@ function Dashboard({sessionId,logout,theme}:{sessionId:number,logout:()=>void,th
      <span className={`me-1.5 size-1.5 rounded-full ${connected?'bg-emerald-500':'bg-amber-500'}`}/>
      {connected?'已连接':'连接中断'}
     </Badge>
-    <GlobalSearch go={go}/><ThemeSwitch {...theme}/><div className="md:hidden"><DeviceMenu device={device.data} logout={logout}><Button variant="ghost" size="icon" aria-label="设备与连接"><Tv/></Button></DeviceMenu></div>
+    <GlobalSearch go={go} localOnly={localOnly}/><ThemeSwitch {...theme}/><div className="md:hidden"><DeviceMenu device={device.data} logout={logout}><Button variant="ghost" size="icon" aria-label="设备与连接"><Tv/></Button></DeviceMenu></div>
    </Header>
    <main className="page-content px-4 pt-4 md:px-6 md:pt-5 w-full max-w-6xl mx-auto">
     <div className={page==='remote'?'hidden':'mb-4 flex items-end justify-between gap-4 border-b pb-4'}><h1 className="text-2xl font-semibold tracking-tight">{current.title}</h1><p className="hidden shrink-0 text-xs text-muted-foreground sm:block">{current.description}</p></div>

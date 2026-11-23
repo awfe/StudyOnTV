@@ -70,27 +70,51 @@
   function latexToSpeech(expr) {
     var s = String(expr == null ? '' : expr);
     if (!/\\|\^/.test(s)) return s;
-    // 常见 LaTeX 数学符号转为自然中文口语，便于电视语音朗读
-    s = s.replace(/\\(?:d|t)?frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$2分之$1');
-    s = s.replace(/\\sqrt\s*\[([^\]]+)\]\s*\{([^{}]+)\}/g, '$1次根号下$2');
-    s = s.replace(/\\sqrt\s*\{([^{}]+)\}/g, '根号$1');
+    // 1. 常见运算符、希腊字母与几何符号转为自然中文口语，便于电视语音朗读
     s = s.replace(/\\times\b/g, '乘');
     s = s.replace(/\\div\b/g, '除以');
     s = s.replace(/\\cdot\b/g, '乘');
     s = s.replace(/\\pm\b/g, '正负');
+    s = s.replace(/\\mp\b/g, '负正');
     s = s.replace(/\\leq?\b/g, '小于等于');
     s = s.replace(/\\geq?\b/g, '大于等于');
     s = s.replace(/\\neq?\b/g, '不等于');
     s = s.replace(/\\approx\b/g, '约等于');
     s = s.replace(/\\infty\b/g, '无穷大');
     s = s.replace(/\\pi\b/g, '派');
-    s = s.replace(/\^\s*\{\\circ\}|\^\\circ|\\circ\b/g, '度');
-    s = s.replace(/\^\s*\{?2\}?(?![0-9])/g, '的平方');
-    s = s.replace(/\^\s*\{?3\}?(?![0-9])/g, '的立方');
+    s = s.replace(/\\alpha\b/g, '阿尔法');
+    s = s.replace(/\\beta\b/g, '贝塔');
+    s = s.replace(/\\gamma\b/g, '伽马');
+    s = s.replace(/\\delta\b/g, '德尔塔');
+    s = s.replace(/\\Delta\b/g, '德尔塔');
+    s = s.replace(/\\theta\b/g, '西塔');
+    s = s.replace(/\\lambda\b/g, '兰姆达');
+    s = s.replace(/\\mu\b/g, '缪');
+    s = s.replace(/\\omega\b/g, '欧米伽');
+    s = s.replace(/\\angle\b/g, '角');
+    s = s.replace(/\\triangle\b/g, '三角形');
+    s = s.replace(/\\perp\b/g, '垂直于');
+    s = s.replace(/\\parallel\b/g, '平行于');
     s = s.replace(/\\(?:left|right|quad|qquad|,|;|!)/g, ' ');
-    s = s.replace(/\\(?:text|mathrm|mathbf|mathit)\s*\{([^{}]+)\}/g, '$1');
     s = s.replace(/\\begin\{[a-zA-Z*]+\}|\\end\{[a-zA-Z*]+\}/g, ' ');
     s = s.replace(/\\\\/g, '，');
+    s = s.replace(/\^\s*\{\\circ\}|\^\\circ|\\circ\b/g, '度');
+    // 2. 花括号结构自底向上有界循环展开，支持嵌套分式/根号/幂次
+    for (var pass = 0; pass < 6; pass++) {
+      var prev = s;
+      s = s.replace(/\\(?:text|mathrm|mathbf|mathit|operatorname)\s*\{([^{}]+)\}/g, '$1');
+      s = s.replace(/\\sqrt\s*\[([^\]]+)\]\s*\{([^{}]+)\}/g, '$1次根号下$2');
+      s = s.replace(/\\sqrt\s*\{([^{}]+)\}/g, '根号$1');
+      s = s.replace(/\\(?:d|t)?frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, '$2分之$1');
+      s = s.replace(/\^\s*\{2\}/g, '的平方');
+      s = s.replace(/\^\s*\{3\}/g, '的立方');
+      s = s.replace(/\^\s*\{([^{}]+)\}/g, '的$1次方');
+      if (s === prev) break;
+    }
+    // 3. 无花括号的单字符幂次
+    s = s.replace(/\^2(?![0-9])/g, '的平方');
+    s = s.replace(/\^3(?![0-9])/g, '的立方');
+    s = s.replace(/\^([0-9a-zA-Z])/g, '的$1次方');
     s = s.replace(/[{}]/g, '');
     return s.replace(/\s+/g, ' ').trim();
   }

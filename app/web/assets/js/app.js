@@ -7,9 +7,10 @@
     screen: '', round: null, config: {}, learning: {}, study: {},
     busy: false, selected: [], version: 0, awaiting: false, reviewed: false,
     review: null, draft: null, unlockPending: false, unlockPendingAt: 0,
-    cardIndex: 0, cardRevealed: false, lastStartOpts: null
+    cardIndex: 0, cardRevealed: false, lastStartOpts: null, loaded: false
   };
-  var toastTimer, nextTimer, taps = 0, lastTap = 0, upTaps = 0, lastUpTap = 0;
+  var toastTimer, nextTimer, resumeTimer, taps = 0, lastTap = 0, upTaps = 0, lastUpTap = 0;
+  function clearResumeTimer() { window.clearTimeout(resumeTimer); resumeTimer = null; }
   var QUESTION_INPUT_GUARD_MS = 300;
   var renderedQuestionNonce = null, questionInputAllowedAt = 0;
   function questionInputTime() {
@@ -48,6 +49,9 @@
   function canRead() { return !!(window.SOTVNative && typeof window.SOTVNative.readInLanguage === 'function'); }
   function isPureStudyMode() { return state.config && state.config.supervisionEnabled === false; }
   function isHubAvailable() { return isPureStudyMode() || !!(state.learning && state.learning.free); }
+  function overrideKey(learning) {
+    return learning && learning.override ? (learning.override.mode + ':' + learning.override.at) : '';
+  }
   // 可用时段文案由设备按周计划算好（state.learning.scheduleText），页面不再自己拼旧版的 windowStart/windowEnd
   function scheduleText() { return (state.learning && state.learning.scheduleText) || ''; }
   // 朗读内容由家长在「设置 → 朗读」里定：只读题干、题干加选项、再加答案（答案在作答后才读）
@@ -113,6 +117,7 @@
     toastTimer = window.setTimeout(function () { box.className = 'toast'; }, 3000);
   }
   function show(screen) {
+    clearResumeTimer();
     if (screen !== 'quiz') nativeCall('stopReading');
     all('.screen').forEach(function (el) { el.className = 'screen'; });
     var target = $('screen-' + screen);
@@ -156,6 +161,7 @@
         // 多孩子（#132）：孩子列表和当前是谁由设备端算好，页面只负责显示 / 切换
         state.children = result.children || [];
         state.activeChild = result.activeChild || '';
+        state.loaded = true;
         pill(); applyTheme(state.config.theme); applyFont();
       }
       if (callback) callback(error, result);
@@ -564,7 +570,6 @@
       readAloudBtn.className = 'btn btn-ghost focusable read-aloud-btn';
       readAloudBtn.style.display = canRead() ? '' : 'none';
     }
-    if (window.SOTV_MATH) { window.SOTV_MATH($('qText')); window.SOTV_MATH(options); }
     if (state.cardRevealed && round.focus === 'memorize' && isTv()) {
       // 默认把焦点落在「良好」上，按 OK 即可顺畅翻下一张，左右可切换重来 / 困难 / 简单
       var fList = focusables();
@@ -596,6 +601,11 @@
     focusDefault();
   }
 
+  function renderStars(difficulty) {
+    var raw = Number(difficulty);
+    var count = isFinite(raw) && raw > 0 ? Math.max(1, Math.min(5, Math.round(raw))) : 2;
+    return new Array(count + 1).join('★');
+  }
   function renderQuestion() {
     var round = state.round;
     if (round && round.studyPhase === 'memorize') { renderStudyCard(); return; }
@@ -608,7 +618,7 @@
     else $('qText').textContent = item.q;
     $('qIndex').textContent = round.mode === 'count' ? round.correct || 0 : round.mode === 'streak' ? round.streak : round.mode === 'practice' ? round.answered + 1 : Math.min(round.answered + 1, round.target);
     $('qTotal').textContent = round.mode === 'practice' ? '题' : '/ ' + round.target;
-    $('qMode').textContent = (round.extra ? '加练任务' : round.focus === 'wrong' ? '错题闯关' : round.focus === 'due' ? '记忆复习' : round.mode === 'streak' ? '连续答对' : round.mode === 'count' ? '答对指定题数' : round.mode === 'practice' ? '自由练习' : '本组任务') + ' · ' + new Array((item.difficulty || 2) + 1).join('★');
+    $('qMode').textContent = (round.extra ? '加练任务' : round.focus === 'wrong' ? '错题闯关' : round.focus === 'due' ? '记忆复习' : round.mode === 'streak' ? '连续答对' : round.mode === 'count' ? '答对指定题数' : round.mode === 'practice' ? '自由练习' : '本组任务') + ' · ' + renderStars(item.difficulty);
     $('qPool').textContent = round.extraPool > 0 ? '加练池还剩 ' + round.extraPool + ' 题' : '';
     $('qDots').textContent = round.mode === 'streak' ? '连续答对 ' + round.streak + ' 题' : '';
     var qLength = speakable(item.q).length;
@@ -685,7 +695,6 @@
       readAloudBtn.className = 'btn btn-ghost focusable read-aloud-btn';
       readAloudBtn.style.display = canRead() ? '' : 'none';
     }
-    window.SOTV_MATH($('qText')); window.SOTV_MATH(options);
     focusDefault();
     // #141：排版要等公式 / 图片渲染完再量；这一步不会改变正常字号下的显示
     window.setTimeout(fitQuiz, 0);
@@ -822,7 +831,6 @@
     go.textContent = result.finished ? '查看结果' : '继续';
     updateFeedbackClock();
     go.className = 'btn ' + (right ? 'btn-primary' : 'btn-danger') + ' focusable';
-    if (window.SOTV_MATH) { window.SOTV_MATH($('fbAnswer')); window.SOTV_MATH($('fbTip')); }
     // 选项已经作答，焦点留在“继续”上（反馈层展开时跳过被遮挡的页脚按钮）
     all('#qOptions .focusable').forEach(function (el) { el.classList.remove('focusable'); el.classList.add('answered'); });
     var list = focusables(); for (var i = 0; i < list.length; i++) if (list[i] === go) { setFocus(i); break; }
@@ -877,12 +885,16 @@
       if (result.passed) {
         if (result.status && result.status.reason) { lock(result.status.reason); toast('奖励已保存，达到可用时段后使用'); return; }
         var reward = Math.round((result.rewardMinutes || 0) * 10) / 10;
+        state.lockReason = '';
         show('lock'); $('lockTitle').textContent = '任务完成'; icon($('lockIcon'), 'check');
         $('lockDesc').textContent = reward > 0 ? '已解锁 ' + reward + ' 分钟' : '今天的时间额度已经领满，先使用已有的时间吧'; $('lockNote').textContent = '';
         $('lockActions').innerHTML = '<button class="btn btn-primary focusable" data-action="resume">开始使用</button>';
         focusDefault();
         // 解锁后回到解题前正在看的应用，不要跳回桌面（#68 / #74）
-        window.setTimeout(function () { if (state.screen === 'lock') nativeCall('resumePrevious'); }, 2500);
+        resumeTimer = window.setTimeout(function () {
+          resumeTimer = null;
+          if (state.screen === 'lock' && !state.lockReason) nativeCall('resumePrevious');
+        }, 2500);
       } else { toast('本组未通过，再试一组'); start(state.lastStartOpts); }
     } else if (result.next) { state.round = result.next; renderQuestion(); }
     else quizEmpty(result.quizEmptyMessage);
@@ -1161,12 +1173,14 @@
       return;
     }
     if (action === 'rate-card' && !state.busy && state.round && state.round.studyCards) {
+      var reqRoundId = state.round.id;
       var rCard = state.round.studyCards[state.cardIndex || 0];
       var quality = +el.getAttribute('data-quality') || 4;
       var totalCards = state.round.studyCards.length;
       state.busy = true;
-      request('/api/quiz/rate', { roundId: state.round.id, qid: rCard ? rCard.id : '', quality: quality }, function (error, result) {
+      request('/api/quiz/rate', { roundId: reqRoundId, qid: rCard ? rCard.id : '', quality: quality }, function (error, result) {
         state.busy = false;
+        if (!state.round || state.round.id !== reqRoundId || state.screen !== 'quiz') return;
         if (error) { toast(error); return; }
         if (result && result.study) state.study = result.study;
         if (result && Array.isArray(result.studyCards)) state.round.studyCards = result.studyCards;
@@ -1181,9 +1195,11 @@
       return;
     }
     if (action === 'finish-memorize' && !state.busy && state.round) {
+      var memRoundId = state.round.id;
       state.busy = true;
-      request('/api/quiz/memorized', { roundId: state.round.id }, function (error, response) {
+      request('/api/quiz/memorized', { roundId: memRoundId }, function (error, response) {
         state.busy = false;
+        if (!state.round || state.round.id !== memRoundId || state.screen !== 'quiz') return;
         if (error) { toast(error); return; }
         var nextRound = (response && response.round) ? response.round : response;
         if (nextRound && nextRound.status) state.learning = nextRound.status;
@@ -1307,14 +1323,22 @@
         else if (wantStart) start(); else route();
       });
     }
-    if (action === 'skip-review') { request('/api/quiz/skip', {}, function (error, result) { if (error) { toast(error); return; } state.awaiting = false; state.reviewed = false; state.busy = false; if (isHubAvailable()) renderHub(); else start(); }); }
+    if (action === 'skip-review' && !state.busy) {
+      state.busy = true;
+      request('/api/quiz/skip', {}, function (error) {
+        state.busy = false;
+        if (error) { toast(error); return; }
+        state.awaiting = false; state.reviewed = false;
+        if (isHubAvailable()) renderHub(); else start();
+      });
+    }
     if (action === 'return-learning') nativeCall('backToQuiz');
     if (action === 'home') nativeCall('exitToLauncher');
-    if (action === 'resume') nativeCall('resumePrevious');
+    if (action === 'resume') { clearResumeTimer(); nativeCall('resumePrevious'); }
     if (action === 'quiz') { if (state.screen === 'pair') nativeCall('backToQuiz'); else if (isHubAvailable()) renderHub(); else start(); }
   }
   function route() {
-    window.clearTimeout(nextTimer); state.busy = false; hideFeedback();
+    window.clearTimeout(nextTimer); clearResumeTimer(); state.busy = false; hideFeedback();
     var hash = location.hash || '#/quiz';
     state.settingsGate = hash.indexOf('reason=settings') >= 0;
     if (hash.indexOf('#/pair') === 0) return pair();
@@ -1344,6 +1368,51 @@
       if (hash.indexOf('#/lock') === 0 && !state.learning.free && !isPureStudyMode()) lock(state.learning.reason || 'timeup');
       else if ((state.children || []).length > 1 && !state.chosen) chooseChild();
       else start();
+    });
+  }
+  function resumeSync() {
+    var hash = location.hash || '#/quiz';
+    if (hash.indexOf('#/pair') === 0 || ((state.settingsGate || hash.indexOf('reason=settings') >= 0) && isSettingsLockActive())) {
+      route();
+      return;
+    }
+    if (state.screen !== 'quiz' || !state.round) {
+      route();
+      return;
+    }
+    var prevQuizGen = state.learning.quizGeneration || 0;
+    var prevPure = isPureStudyMode();
+    var prevFree = !!state.learning.free;
+    var prevOvKey = overrideKey(state.learning);
+    var prevAwaiting = !!state.learning.awaitingReview;
+    var prevChild = state.activeChild || '';
+    loadState(function (error) {
+      if (error) return;
+      if (state.screen !== 'quiz' || !state.round) return;
+      var reason = state.learning.reason;
+      var settingsBlocked = (state.settingsGate || reason === 'settings') && isSettingsLockActive();
+      var forceLock = settingsBlocked ||
+        (!isPureStudyMode() && reason === 'locked') ||
+        (!isHubAvailable() && state.config.playMode !== 'practice' && reason &&
+          ['rest', 'schedule', 'rounds', 'quota', 'feedback'].indexOf(reason) >= 0);
+      if (forceLock) {
+        window.clearTimeout(nextTimer); state.busy = false; state.awaiting = false; state.reviewed = false;
+        state.round = null; clearRound(); hideFeedback();
+        lock(settingsBlocked ? 'settings' : reason);
+        return;
+      }
+      var invalidated =
+        prevQuizGen !== (state.learning.quizGeneration || 0) ||
+        prevPure !== isPureStudyMode() ||
+        (prevChild && state.activeChild && prevChild !== state.activeChild) ||
+        (!isPureStudyMode() && prevOvKey !== overrideKey(state.learning)) ||
+        (!isPureStudyMode() && state.config.playMode !== 'practice' && prevFree !== !!state.learning.free) ||
+        prevAwaiting !== !!state.learning.awaitingReview;
+      if (invalidated) {
+        window.clearTimeout(nextTimer); state.busy = false; state.awaiting = false; state.reviewed = false;
+        state.round = null; clearRound(); hideFeedback();
+        route();
+      }
     });
   }
   function boot() {
@@ -1385,8 +1454,8 @@
       $('clock').textContent = new Date().toTimeString().slice(0, 5);
       if (state.screen === 'pair') return;
       // 题目提交中：等作答响应回来再轮询，否则 start() 可能把还在途中的提交状态重置掉
-      if (state.busy && !state.feedback) return;
-      var version = state.config.version, quizGeneration = state.learning.quizGeneration || 0, wasFree = !!state.learning.free, wasPure = isPureStudyMode();
+      if (!state.loaded || (state.busy && !state.feedback)) return;
+      var version = state.config.version, quizGeneration = state.learning.quizGeneration || 0, wasFree = !!state.learning.free, wasPure = isPureStudyMode(), prevOvKey = overrideKey(state.learning);
       loadState(function (error) {
         if (error) return;
         if (quizGeneration !== (state.learning.quizGeneration || 0)) {
@@ -1413,9 +1482,7 @@
           if (isHubAvailable()) renderHub(); else start();
           return;
         }
-        var ovKey = state.learning.override ? state.learning.override.mode + state.learning.override.at : '';
-        if (ovKey !== (state.ovKey || '')) {
-          state.ovKey = ovKey;
+        if (overrideKey(state.learning) !== prevOvKey) {
           if (!isPureStudyMode()) {
             window.clearTimeout(nextTimer); state.busy = false; state.awaiting = false; state.reviewed = false;
             state.round = null; hideFeedback();
@@ -1520,7 +1587,7 @@
     },
     state: state
   };
-  window.SOTV_RESUME = function () { if (document.readyState === 'complete' && !state.busy && state.screen !== 'pair') route(); };
+  window.SOTV_RESUME = function () { if (document.readyState === 'complete' && !state.busy && state.screen !== 'pair') resumeSync(); };
   window.addEventListener('hashchange', route);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

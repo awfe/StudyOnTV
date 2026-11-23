@@ -120,6 +120,7 @@ class GateOverlay(
             // 已经挂载时管控原因变化（例如答题页中途跳进系统设置变成 settings，或恢复为 timeup）也要切换目标路由
             if (reason != currentReason) {
                 currentReason = reason
+                dismissInlineInput(notifyCancel = true)
                 val targetUrl = Prefs.localBase(context) + "#/" + pageFor(reason)
                 web?.let { view ->
                     view.loadUrl(targetUrl)
@@ -188,10 +189,12 @@ class GateOverlay(
         }
     }
 
-    fun suspend() {
+    fun suspend() = suspendInternal(notifyCancel = true)
+
+    private fun suspendInternal(notifyCancel: Boolean) {
         handler.removeCallbacks(verifyVisibility)
         handler.removeCallbacks(probePageTask)
-        dismissInlineInput(notifyCancel = false)
+        dismissInlineInput(notifyCancel = notifyCancel)
         val host = container ?: return
         if (attached) try { manager.removeViewImmediate(host) } catch (_: Exception) { }
         if (attached && !InputSupport.active) MediaPause.release(context)
@@ -309,6 +312,9 @@ class GateOverlay(
     private fun dismissInlineInput(notifyCancel: Boolean) {
         val panel = inlineInputPanel ?: return
         inlineInputPanel = null
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        val token = panel.findFocus()?.windowToken ?: panel.windowToken
+        if (token != null) imm?.hideSoftInputFromWindow(token, 0)
         (panel.parent as? ViewGroup)?.removeView(panel)
         if (notifyCancel) {
             web?.post {
@@ -337,7 +343,7 @@ class GateOverlay(
         handler.removeCallbacks(verifyVisibility)
         handler.removeCallbacks(probePageTask)
         val view = web ?: return
-        suspend()
+        suspendInternal(notifyCancel = false)
         MediaPause.release(context)
         (view.parent as? ViewGroup)?.removeView(view)
         container = null
@@ -370,14 +376,22 @@ class GateOverlay(
                 }
             }
         }
+        private fun canExitNow(): Boolean = try {
+            DeviceRuntime.learning.status().optBoolean("canExit")
+        } catch (_: Throwable) {
+            false
+        }
         @JavascriptInterface fun resumePrevious() {
+            if (!canExitNow()) return
             handler.post {
+                if (!canExitNow()) return@post
                 val target = GateService.rememberedActive()
                 hide()
                 GateService.hideGates()
                 if (target == null || target == context.packageName || Foreground.isLauncher(target)) return@post
                 // 悬浮层收起后系统通常会把原应用带回前台；没回来就主动拉起
                 handler.postDelayed({
+                    if (!canExitNow()) return@postDelayed
                     val now = try { Foreground.current(context) } catch (_: Exception) { null }
                     if (now == null || now == context.packageName || Foreground.isLauncher(now))
                         DeviceBridge.launchPackage(context, target)
@@ -471,9 +485,9 @@ class GateOverlay(
             return true
         }
         @JavascriptInterface fun exitToLauncher() {
-            val status = DeviceRuntime.learning.status()
-            if (!status.optBoolean("canExit")) return
+            if (!canExitNow()) return
             handler.post {
+                if (!canExitNow()) return@post
                 hide()
                 if (goHome?.invoke() != true) context.startActivity(Intent(Intent.ACTION_MAIN)
                     .addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

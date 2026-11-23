@@ -25,5 +25,20 @@ export const ruleSchema=z.object({
 }).superRefine((c,ctx)=>{if(c.learningContent!=='quiz'&&!c.educationalVideos.length)ctx.addIssue({code:'custom',path:['educationalVideos'],message:'视频模式需要至少一个视频直链'});if(c.educationalVideos.some(url=>!/^https?:\/\//.test(url)))ctx.addIssue({code:'custom',path:['educationalVideos'],message:'请使用 HTTP/HTTPS 视频地址'});if(!c.allDay){if(!timePattern.test(c.windowStart))ctx.addIssue({code:'custom',path:['windowStart'],message:'请选择有效开始时间'});if(!timePattern.test(c.windowEnd))ctx.addIssue({code:'custom',path:['windowEnd'],message:'请选择有效结束时间'});if(timePattern.test(c.windowStart)&&c.windowStart===c.windowEnd)ctx.addIssue({code:'custom',path:['windowEnd'],message:'开始与结束不能相同，全天请开启「全天管控」'});}});
 export type Rules=z.infer<typeof ruleSchema>;
 export const defaults:Rules={supervisionEnabled:true,memorizeFirst:false,spacedScope:'all',dailyMinutes:40,sessionMinutes:10,questionsPerRound:5,roundsPerDay:3,passRatio:.6,playMode:'round',timezone:'',allDay:true,windowStart:'18:30',windowEnd:'20:00',extraEnabled:true,wrongThreshold:3,extraQuestions:2,difficultyRewardEnabled:false,difficultyRewards:{1:1,2:2,3:3,4:4,5:5},spacedRepetitionEnabled:false,coverageFirst:true,newFirst:false,wrongFirst:false,scheduleMode:'allow',blockSettingsDuringControl:true,shuffleOptions:false,showCountdown:true,weekSlots:Array(7).fill('1'.repeat(48)),holidayMode:'sunday',quizSubjects:[],quizLevels:[],dailyFreeMinutes:0,bootFreeMinutes:0,dailyLimitEnabled:true,roundsLimitEnabled:true,restEnabled:false,restWatchMinutes:40,restMinutes:10,wrongReviewSeconds:0,fontScale:100,childSelectLevel:false,trafficAssistEnabled:false,backgroundAnchorEnabled:true,forceFullscreenGate:false,allowQuizUnlock:false,watchWhitelist:[],quizBanks:[],learningContent:'quiz',educationalVideos:[],videoMinutes:1,timePoints:[],exemptWindows:[]};
+/** 归一化旧配置中的网课时段：mode === 'counted' 时补齐默认 60 分钟并夹紧到 1–480。 */
+export function normalizeTimePoints(points:unknown):TimePoint[]{
+ if(!Array.isArray(points))return [];
+ return points.map(raw=>{
+  const item=raw as TimePoint;
+  if(item?.mode!=='counted')return item;
+  const n=item.dailyMinutes===undefined||item.dailyMinutes===null||(item.dailyMinutes as unknown)===''?NaN:Number(item.dailyMinutes);
+  const dailyMinutes=Number.isFinite(n)?Math.min(480,Math.max(1,Math.round(n))):60;
+  return {...item,dailyMinutes};
+ });
+}
+export function normalizeRules(config?:Partial<Rules>|null):Rules{
+ const merged={...defaults,...(config||{})};
+ return {...merged,timePoints:normalizeTimePoints(merged.timePoints)};
+}
 export function weekFrom(start:string,end:string){const chars=Array(48).fill('0');const min=(s:string)=>{const[h,m]=s.split(':').map(Number);return h*60+m;};const a=min(start),b=min(end);for(let i=0;i<48;i++){const t=i*30;if((a<b&&t>=a&&t<b)||(a>b&&(t>=a||t<b)))chars[i]='1';}return Array(7).fill(chars.join(''));}
 export function segments(allDay:boolean,start:string,end:string){if(allDay)return[{left:0,width:100}];if(!timePattern.test(start)||!timePattern.test(end)||start===end)return[];const min=(s:string)=>{const [h,m]=s.split(':').map(Number);return h*60+m;};const s=min(start)/14.4,e=min(end)/14.4;return s<e?[{left:s,width:e-s}]:[{left:s,width:100-s},{left:0,width:e}];}

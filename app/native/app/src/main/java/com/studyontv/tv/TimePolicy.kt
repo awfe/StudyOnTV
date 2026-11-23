@@ -9,14 +9,16 @@ class TimePolicy(private val store: LocalStore, private val boot: () -> Int) {
     private fun put(key: String, value: Long) = store.set(key, value.toString())
     fun dailyLimit(config: JSONObject): Long = if (!config.optBoolean("dailyLimitEnabled", true)) Long.MAX_VALUE / 4
         else (config.optLong("dailyMinutes", 40) * 60000L + n("cap_adjust_ms")).coerceAtLeast(0)
-    fun left(key: String): Long {
-        val raw = store.get(key)
-        if (raw.isEmpty()) return 0
-        val deadline = JSONObject(raw)
-        val elapsed = SystemClock.elapsedRealtime()
-        val sameBoot = deadline.optInt("boot", -2) == boot() && elapsed >= deadline.optLong("atElapsed")
-        return (if (sameBoot) deadline.optLong("untilElapsed") - elapsed else deadline.optLong("until") - System.currentTimeMillis()).coerceAtLeast(0)
-    }
+    fun left(key: String): Long = resolveLeft(
+        raw = store.get(key),
+        currentBoot = boot(),
+        elapsed = SystemClock.elapsedRealtime(),
+        nowWall = System.currentTimeMillis(),
+        onCorrupted = {
+            Diag.warn("TimePolicy", "invalid deadline JSON for key=$key, clearing corrupted value")
+            store.set(key, "")
+        }
+    )
     fun deadline(key: String, milliseconds: Long) {
         val elapsed = SystemClock.elapsedRealtime()
         store.set(key, JSONObject().put("boot", boot()).put("atElapsed", elapsed)
@@ -92,6 +94,25 @@ class TimePolicy(private val store: LocalStore, private val boot: () -> Int) {
     companion object {
         /** 息屏至少 5 分钟后再唤醒才重置开机免费时长，防止快速息屏/亮屏刷额度 */
         const val MIN_BOOT_FREE_OFF_MS = 5 * 60 * 1000L
+
+        /** 解析持久化期限 JSON 并计算剩余毫秒数；坏数据返回 0 并回调清理，避免打崩管控 tick 与状态接口（ST-107） */
+        internal fun resolveLeft(
+            raw: String,
+            currentBoot: Int,
+            elapsed: Long,
+            nowWall: Long,
+            onCorrupted: () -> Unit = {}
+        ): Long {
+            if (raw.isEmpty()) return 0L
+            val deadline = try {
+                JSONObject(raw)
+            } catch (_: Exception) {
+                onCorrupted()
+                return 0L
+            }
+            val sameBoot = deadline.optInt("boot", -2) == currentBoot && elapsed >= deadline.optLong("atElapsed")
+            return (if (sameBoot) deadline.optLong("untilElapsed") - elapsed else deadline.optLong("until") - nowWall).coerceAtLeast(0L)
+        }
     }
     fun adjust(minutes: Int, config: JSONObject) {
         require(minutes != 0 && minutes in -480..480) { "调整时长需要为 -480 到 480 分钟，且不能为 0" }

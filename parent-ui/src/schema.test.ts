@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {defaults,ruleSchema,segments} from './schema.ts';
+import {defaults,normalizeRules,normalizeTimePoints,ruleSchema,segments} from './schema.ts';
 assert.equal(ruleSchema.safeParse({...defaults,allDay:false,windowStart:'',windowEnd:''}).success,false);
 assert.equal(ruleSchema.safeParse({...defaults,allDay:false,windowStart:'18:30',windowEnd:'18:30'}).success,false);
 assert.equal(ruleSchema.safeParse({...defaults,allDay:true,windowStart:'18:30',windowEnd:'18:30'}).success,true);
@@ -69,4 +69,21 @@ assert.equal(ruleSchema.parse({...defaults,supervisionEnabled:false,memorizeFirs
 assert.equal(ruleSchema.parse({...defaults,memorizeFirst:true}).memorizeFirst,true);
 assert.equal(ruleSchema.parse({...defaults,spacedScope:'wrong_only'}).spacedScope,'wrong_only');
 assert.equal(ruleSchema.safeParse({...defaults,spacedScope:'invalid'}).success,false);
+// ST-501：旧配置 timePoints 归一化（counted 缺省/null/越界）
+const normalizedPoints=normalizeTimePoints([
+ {id:'a',name:'网课1',days:[0],start:'19:00',end:'20:00',mode:'counted'},
+ {id:'b',name:'网课2',days:[1],start:'19:00',end:'20:00',mode:'counted',dailyMinutes:null as unknown as number},
+ {id:'c',name:'网课3',days:[2],start:'19:00',end:'20:00',mode:'counted',dailyMinutes:0},
+ {id:'d',name:'网课4',days:[3],start:'19:00',end:'20:00',mode:'counted',dailyMinutes:999},
+ {id:'e',name:'网课5',days:[4],start:'19:00',end:'20:00',mode:'counted',dailyMinutes:45},
+ {id:'f',name:'网课6',days:[5],start:'19:00',end:'20:00',mode:'free'},
+]);
+assert.equal(normalizedPoints[0].dailyMinutes,60);
+assert.equal(normalizedPoints[1].dailyMinutes,60);
+assert.equal(normalizedPoints[2].dailyMinutes,1);
+assert.equal(normalizedPoints[3].dailyMinutes,480);
+assert.equal(normalizedPoints[4].dailyMinutes,45);
+assert.equal(normalizedPoints[5].dailyMinutes,undefined);
+assert.deepEqual(normalizeTimePoints(undefined),[]);
+assert.equal(normalizeRules({timePoints:[{id:'x',name:'数学',days:[0],start:'19:00',end:'20:00',mode:'counted'}]}).timePoints[0].dailyMinutes,60);
 console.log('PASS schedule validation, quotas, rest/review/font bounds, video settings, watch whitelist, question order, study modes and backward-compatible defaults');

@@ -101,11 +101,15 @@ class EducationalVideoActivity : Activity() {
             setMediaController(MediaController(this@EducationalVideoActivity))
             setOnPreparedListener { preparedAt = SystemClock.elapsedRealtime();renderStarted = false;if (resumed) start() }
             setOnInfoListener { _, what, _ ->
-                if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START && !renderStarted) {
-                    renderStarted = true
-                    Diag.info("Video", "render start duration=${video.duration}ms url=${intent.getStringExtra("url")}")
+                if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                    if (!renderStarted) {
+                        renderStarted = true
+                        Diag.info("Video", "render start duration=${video.duration}ms url=${intent.getStringExtra("url")}")
+                    }
+                    true
+                } else {
+                    false
                 }
-                true
             }
             setOnCompletionListener {
                 when {
@@ -136,7 +140,21 @@ class EducationalVideoActivity : Activity() {
             video.setVideoPath(videoUrl)
         }
     }
-    override fun onResume() { super.onResume();resumed = true;handler.removeCallbacks(tick);handler.post(tick) }
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        val now = SystemClock.elapsedRealtime()
+        if (::video.isInitialized && failure.isEmpty() && !complete.isEnabled) {
+            if (!renderStarted) {
+                if (preparedAt > 0L) preparedAt = now else openedAt = now
+            }
+            if (preparedAt > 0L && !video.isPlaying) {
+                video.start()
+            }
+        }
+        handler.removeCallbacks(tick)
+        handler.post(tick)
+    }
     override fun onPause() {
         resumed = false
         handler.removeCallbacks(tick)

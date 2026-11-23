@@ -38,9 +38,11 @@ export default function QuestionImportDialog({open,onOpenChange,meta,onImported}
  // 导入成功后补一句「跳过了哪几题」，所以跳过原因要跨一次请求保留
  const pendingIssues=useRef<{index:number,reason:string}[]>([]);
  const importing=useMutation({
-  mutationFn:(items:any[])=>api('/api/questions','POST',{items}),
+  mutationFn:(items:any[])=>api('/api/questions','POST',{items},60000),
   onSuccess:(r:any)=>{
-   client.invalidateQueries({queryKey:['bank']});client.invalidateQueries({queryKey:['bank-meta']});
+   client.invalidateQueries({queryKey:['bank']});
+   client.invalidateQueries({queryKey:['bank-meta']});
+   client.invalidateQueries({queryKey:['analytics']});
    onOpenChange(false);
    onImported(`已导入 ${r.added} 题`);
    const skipped=pendingIssues.current;pendingIssues.current=[];
@@ -51,6 +53,7 @@ export default function QuestionImportDialog({open,onOpenChange,meta,onImported}
   },
   onError:(e:any)=>{pendingIssues.current=[];toast.error(e.message);},
  });
+ const busy=importing.isPending||documentBusy;
  async function pick(e:any){
   const f=e.target.files?.[0];
   if(!f)return;
@@ -81,8 +84,12 @@ export default function QuestionImportDialog({open,onOpenChange,meta,onImported}
    importing.mutate(result.items.map((q:any)=>({...q,bank:q.bank||bank,subject:q.subject||subject,level:q.level||level})));
   }catch(error:any){toast.error(error.message||'题库格式有误');}
  }
- return <Dialog open={open} onOpenChange={onOpenChange}>
-  <DialogContent className="grid max-h-[90dvh] w-[calc(100%-1.5rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-2xl">
+ return <Dialog open={open} onOpenChange={next=>{if(!next&&busy)return;onOpenChange(next);}}>
+  <DialogContent
+   className="grid max-h-[90dvh] w-[calc(100%-1.5rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-2xl"
+   onInteractOutside={e=>{if(busy)e.preventDefault();}}
+   onEscapeKeyDown={e=>{if(busy)e.preventDefault();}}
+  >
    <DialogHeader className="border-b px-5 py-4">
     <DialogTitle>导入题库</DialogTitle>
     <DialogDescription>支持 Word（.docx）、PDF、纯文本或 JSON 文件；选好文档后按两步解析并确认入库。</DialogDescription>
@@ -102,7 +109,7 @@ export default function QuestionImportDialog({open,onOpenChange,meta,onImported}
        <span className={parsedCount!==null?'font-medium text-primary':''}>2. 预览并确认导入</span>
       </div>
       <Toolbar className="flex-wrap gap-2">
-       <ToolbarGroup><Button type="button" variant="outline" size="sm" onClick={()=>{if(file.current){file.current.value='';file.current.click();}}}><Upload/>{documentBusy?'读取文档中…':'选择 Word / PDF / JSON 文件'}</Button><span className="max-w-64 truncate text-xs text-muted-foreground">{fileName||'未选择文件'}</span></ToolbarGroup>
+       <ToolbarGroup><Button type="button" variant="outline" size="sm" disabled={busy} onClick={()=>{if(file.current){file.current.value='';file.current.click();}}}><Upload/>{documentBusy?'读取文档中…':'选择 Word / PDF / JSON 文件'}</Button><span className="max-w-64 truncate text-xs text-muted-foreground">{fileName||'未选择文件'}</span></ToolbarGroup>
       </Toolbar>
      </div>
      {parsedCount!==null&&isJson&&(
@@ -129,8 +136,8 @@ export default function QuestionImportDialog({open,onOpenChange,meta,onImported}
     </FieldGroup>
    </div>
    <DialogFooter className="border-t px-5 py-3">
-    <Button variant="outline" onClick={()=>onOpenChange(false)}>取消</Button>
-    <Button onClick={importNow} disabled={importing.isPending||documentBusy||!trimmed}>
+    <Button variant="outline" disabled={busy} onClick={()=>onOpenChange(false)}>取消</Button>
+    <Button onClick={importNow} disabled={busy||!trimmed}>
      {importing.isPending
       ?'正在导入…'
       :needsParse

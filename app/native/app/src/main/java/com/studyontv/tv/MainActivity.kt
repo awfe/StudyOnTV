@@ -47,8 +47,23 @@ open class MainActivity : Activity() {
     private fun checkCrashReport() {
         if (!CrashDetector.hasPending(this)) return
 
+        // EU 仅本地隐私版：不弹外部上传征求框，直接清理遗留崩溃标记
+        if (LocalOnlyGuard.enabled) {
+            CrashDetector.readAndClear(this)
+            return
+        }
+
+        // 全屏锁屏学习页面向孩子，不弹家长级隐私授权对话框
+        if (this is GateActivity) return
+
         // 已同意：DeviceRuntime.ensure() 已自动触发上传，无需再操作
         if (Prefs.crashUploadConsent(this)) return
+
+        // 已明确拒绝过：清理遗留崩溃标记，不再重复打扰
+        if (Prefs.crashUploadConsentAsked(this)) {
+            CrashDetector.readAndClear(this)
+            return
+        }
 
         // 未同意：弹窗征求同意
         val summary = CrashDetector.readAndClear(this)
@@ -155,6 +170,7 @@ open class MainActivity : Activity() {
         if (isPowerKey(event.keyCode)) {
             if (event.action == KeyEvent.ACTION_DOWN && this is GateActivity) {
                 Diag.info("Gate", "遥控器电源键：退出全屏学习页，交给系统处理")
+                GateService.onPowerKeyExit()
                 finish()
             }
             return super.dispatchKeyEvent(event)

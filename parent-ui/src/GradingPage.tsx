@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bot, ClipboardCheck, History, LoaderCircle, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
@@ -55,6 +55,8 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
     hasKey: false,
   });
   const [dirty, setDirty] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [failedSignature, setFailedSignature] = useState('');
 
   useEffect(() => {
     if (settings.data && !dirty) setConfig({ mode: 'manual', ...settings.data, apiKey: '' });
@@ -62,17 +64,34 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
 
   function change(key: string, value: any) {
     setDirty(true);
+    setSaveError('');
     setConfig((current: any) => ({ ...current, [key]: value }));
   }
 
+  const passScoreNum = Number(config.passScore);
+  const payload = { ...config, passScore: passScoreNum };
+  const signature = JSON.stringify(payload);
+  const latestSignature = useRef(signature);
+  latestSignature.current = signature;
+
   const save = useMutation({
     mutationFn: (value: any) => api('/api/grading', 'PUT', value),
-    onSuccess: response => {
-      setConfig({ ...response, apiKey: '' });
-      setDirty(false);
-      client.setQueryData(['grading', sessionId], response);
+    onMutate: () => setSaveError(''),
+    onSuccess: (response, body) => {
+      client.setQueryData(['grading', sessionId], (old: any) =>
+        old ? { ...old, ...response } : response,
+      );
+      if (latestSignature.current === JSON.stringify(body)) {
+        setConfig((old: any) => ({ ...old, ...response, apiKey: '' }));
+        setDirty(false);
+        setFailedSignature('');
+      }
     },
-    onError: (error: any) => toast.error(error.message),
+    onError: (error: any, body) => {
+      setSaveError(error?.message || '自动保存失败，请重试');
+      setFailedSignature(JSON.stringify(body));
+      toast.error(error.message);
+    },
   });
 
   const aiConfigured = !!(
@@ -84,9 +103,10 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
   );
 
   const valid =
-    Number.isFinite(Number(config.passScore)) &&
-    Number(config.passScore) >= 1 &&
-    Number(config.passScore) <= 100 &&
+    String(config.passScore).trim() !== '' &&
+    Number.isInteger(passScoreNum) &&
+    passScoreNum >= 1 &&
+    passScoreNum <= 100 &&
     (config.mode !== 'ai' ||
       (() => {
         try {
@@ -105,10 +125,10 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
       })());
 
   useEffect(() => {
-    if (!dirty || !valid) return;
-    const timer = window.setTimeout(() => save.mutate(config), 800);
+    if (!dirty || !valid || save.isPending || failedSignature === signature) return;
+    const timer = window.setTimeout(() => save.mutate(payload), 800);
     return () => window.clearTimeout(timer);
-  }, [config, dirty, valid]);
+  }, [signature, dirty, valid, save.isPending, failedSignature]);
 
   return (
     <div className="space-y-4">
@@ -121,7 +141,7 @@ export default function GradingPage({ sessionId }: { sessionId: number }) {
             state={
               (save.isPending
                 ? 'saving'
-                : save.isError
+                : saveError
                   ? 'error'
                   : dirty
                     ? valid

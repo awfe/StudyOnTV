@@ -26,6 +26,10 @@ class UpdateActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (LocalOnlyGuard.enabled) {
+            finish()
+            return
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         immersive()
 
@@ -160,9 +164,16 @@ class UpdateActivity : Activity() {
         super.onDestroy()
     }
 
+    @Synchronized
+    private fun hasValidCachedApk(): Boolean {
+        val ready = ApkInstaller.apkFile(this)
+        if (!ApkInstaller.alreadyDownloaded(this, 0)) return false
+        return isCachedApkMatching(ready, sha256, deleteOnMismatch = true)
+    }
+
     private fun refreshPrimaryButtonLabel(button: TextView) {
         Thread {
-            val downloaded = try { ApkInstaller.alreadyDownloaded(this, 0) } catch (_: Exception) { false }
+            val downloaded = try { hasValidCachedApk() } catch (_: Exception) { false }
             runOnUiThread {
                 if (!isFinishing && button.isEnabled && (button.text == "立即更新" || button.text == "去允许安装应用")) {
                     button.text = if (downloaded) "开始安装" else "立即更新"
@@ -194,6 +205,7 @@ class UpdateActivity : Activity() {
             // Android 8+ 是按应用授权的：没开之前调起安装器只会失败，先去设置里打开
             status.text = "先允许「题了个题」安装应用，允许后返回这里再点一次"
             try {
+                GateService.openingSystemPage(parentAuthorized = true)
                 startActivity(ApkInstaller.permissionIntent(this))
             } catch (e: Exception) {
                 status.text = "这台电视找不到「安装未知应用」设置页，请到 设置 → 应用 里允许「题了个题」安装应用"
@@ -209,7 +221,7 @@ class UpdateActivity : Activity() {
         Thread {
             try {
                 val ready = ApkInstaller.apkFile(this)
-                if (ApkInstaller.alreadyDownloaded(this, 0)) {
+                if (hasValidCachedApk()) {
                     val installed = ApkInstaller.install(this, ready)
                     if (installed) {
                         installHandedOff = true
@@ -297,4 +309,36 @@ class UpdateActivity : Activity() {
             android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
             intArrayOf(from, to)
         ).apply { cornerRadius = dp(radiusDp).toFloat() }
+
+    companion object {
+        /**
+         * 校验缓存 APK 文件是否与目标版本 SHA-256 摘要一致。
+         * - expectedSha256 为空时不强制比对；
+         * - 非空时计算文件 SHA-256 忽略大小写比对，不匹配或不可读时清理过期缓存并返回 false。
+         */
+        fun isCachedApkMatching(file: java.io.File, expectedSha256: String, deleteOnMismatch: Boolean = true): Boolean {
+            if (!file.exists() || !file.isFile) return false
+            val expected = expectedSha256.trim()
+            if (expected.isEmpty()) return true
+            val actual = try {
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                file.inputStream().use { input ->
+                    val buf = ByteArray(8192)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        digest.update(buf, 0, n)
+                    }
+                }
+                digest.digest().joinToString("") { "%02x".format(it) }
+            } catch (_: Exception) {
+                ""
+            }
+            val matched = actual.isNotEmpty() && actual.equals(expected, ignoreCase = true)
+            if (!matched && deleteOnMismatch) {
+                try { file.delete() } catch (_: Exception) { }
+            }
+            return matched
+        }
+    }
 }

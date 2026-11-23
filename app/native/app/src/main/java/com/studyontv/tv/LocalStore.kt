@@ -11,6 +11,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -84,7 +85,97 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         private val SECRET_KV_KEYS = setOf(
             "admin_token", "speech_settings", "grading_settings", "parent_access"
         )
+        /** 绑定本机单调时钟、重启计数或半途会话的瞬态存储键：导出与恢复一律跳过，避免换机污染 */
+        private val EPHEMERAL_KV_KEYS = setOf(
+            "active_round", "last_answer", "feedback_result", "feedback_deadline",
+            "review_feedback", "remote_override", "rest_deadline", "rest_watched_ms",
+            "boot_quota_ms", "video_lesson"
+        )
+        private val CHILD_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,32}$")
         const val MAX_CHILDREN = 8
+
+        internal fun isValidChildId(id: String): Boolean =
+            id == DEFAULT_CHILD || CHILD_ID_PATTERN.matches(id)
+
+        internal fun isEphemeralKvKey(key: String): Boolean {
+            val base = if (key.startsWith("child:")) key.substringAfterLast(':') else key
+            return base in EPHEMERAL_KV_KEYS
+        }
+
+        /** EU Local-Only 模式下清洗单个备份 kv 项（剥离 config 中的公网公益视频与 bank_market_sources 中的公网源）。 */
+        internal fun sanitizeKvValueForLocalOnly(key: String, value: String, localOnly: Boolean = LocalOnlyGuard.enabled): String {
+            if (!localOnly) return value
+            val base = if (key.startsWith("child:")) key.substringAfterLast(':') else key
+            return when (base) {
+                "config" -> try {
+                    val cfg = JSONObject(value)
+                    val videos = cfg.optJSONArray("educationalVideos")
+                    if (videos != null) {
+                        val kept = JSONArray()
+                        for (i in 0 until videos.length()) {
+                            val raw = videos.optString(i).trim()
+                            if (raw.isNotEmpty() && LocalOnlyGuard.isLocalUrl(raw)) kept.put(raw)
+                        }
+                        cfg.put("educationalVideos", kept)
+                        if (kept.length() == 0 && cfg.optString("learningContent", "quiz") != "quiz") {
+                            cfg.put("learningContent", "quiz")
+                        }
+                    }
+                    cfg.toString()
+                } catch (_: Exception) { value }
+                "bank_market_sources" -> try {
+                    val arr = JSONArray(value)
+                    val kept = JSONArray()
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        val url = item.optString("url").trim()
+                        if (url.isNotEmpty() && LocalOnlyGuard.isLocalUrl(url)) kept.put(item)
+                    }
+                    kept.toString()
+                } catch (_: Exception) { value }
+                "bank_automation" -> try {
+                    sanitizeBankAutomationForLocalOnly(JSONObject(value), localOnly).toString()
+                } catch (_: Exception) { value }
+                else -> value
+            }
+        }
+
+        /** EU Local-Only 模式下清洗备份中的 bankAutomation.sources 公网远程题库源。 */
+        internal fun sanitizeBankAutomationForLocalOnly(raw: JSONObject, localOnly: Boolean = LocalOnlyGuard.enabled): JSONObject {
+            val next = JSONObject(raw.toString())
+            next.remove("running")
+            next.remove("status")
+            if (!localOnly) return next
+            val sources = next.optJSONArray("sources")
+            if (sources != null) {
+                val kept = JSONArray()
+                for (i in 0 until sources.length()) {
+                    val item = sources.optJSONObject(i) ?: continue
+                    val url = item.optString("url").trim()
+                    if (url.isNotEmpty() && LocalOnlyGuard.isLocalUrl(url)) kept.put(item)
+                }
+                next.put("sources", kept)
+            }
+            return next
+        }
+
+        /** 间隔复习纳入范围判断（repetitionStats / studySummary / learningAnalytics 唯一真理源）。 */
+        internal fun inSpacedScope(wrongOnly: Boolean, lastCorrect: Int, answered: Int, correct: Int): Boolean =
+            !wrongOnly || lastCorrect == 0 || answered > correct
+
+        /** 按 IANA 时区 ID 解析时区；留空或非法值回退设备默认时区。 */
+        internal fun resolveTimeZone(rawZoneId: String): TimeZone {
+            val id = rawZoneId.trim()
+            if (id.isEmpty()) return TimeZone.getDefault()
+            val zone = TimeZone.getTimeZone(id)
+            return if (zone.id == "GMT" && id != "GMT" && id != "UTC") TimeZone.getDefault() else zone
+        }
+
+        /** 计算指定时区在给定时刻所在自然日的 00:00:00.000 毫秒时间戳。 */
+        internal fun startOfDayMillis(nowMs: Long, zone: TimeZone): Long = Calendar.getInstance(zone).apply {
+            timeInMillis = nowMs
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
     }
 
     private val appContext: Context = context.applicationContext ?: context
@@ -478,9 +569,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         }, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
-    fun repetitionStats(): JSONObject {
-        val child = activeChild()
-        val wrongOnly = config().optString("spacedScope") == "wrong_only"
+    @JvmOverloads
+    fun repetitionStats(child: String = activeChild()): JSONObject {
+        val wrongOnly = config(child).optString("spacedScope") == "wrong_only"
         val nowStr = System.currentTimeMillis().toString()
         val sql = if (wrongOnly) {
             "SELECT COUNT(*),COALESCE(SUM(CASE WHEN question_progress.due_at<=? AND (stats.last_correct=0 OR COALESCE(stats.answered,0)>COALESCE(stats.correct,0)) THEN 1 ELSE 0 END),0) " +
@@ -566,9 +657,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     }
 
     /** 学习相关的键按孩子隔离；朗读 / 批改 / 远程题库这类设备设置仍共用一份 */
-    private fun scoped(key: String): String {
+    private fun scoped(key: String, child: String = activeChild()): String {
         if (key in SHARED_KEYS) return key
-        val child = activeChild()
         return if (child == DEFAULT_CHILD) key else "child:$child:$key"
     }
 
@@ -689,8 +779,8 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         UUID.randomUUID().toString().also { set("admin_token", it) }
     }
 
-    fun config(): JSONObject {
-        val child = activeChild()
+    @JvmOverloads
+    fun config(child: String = activeChild()): JSONObject {
         // 每次返回全新 JSONObject 副本，防止调用方原地修改返回对象污染缓存
         configCache[child]?.let { return JSONObject(it) }
         val defaults = JSONObject().put("dailyMinutes", 40).put("dailyFreeMinutes", 0).put("sessionMinutes", 10)
@@ -721,7 +811,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             .put("timePoints", JSONArray()).put("exemptWindows", JSONArray())
             .put("timezone", "")
             .put("version", 1)
-        val saved = try { JSONObject(get("config", "{}")) } catch (_: Exception) { JSONObject() }
+        val saved = try { JSONObject(rawGet(scoped("config", child), "{}")) } catch (_: Exception) { JSONObject() }
         saved.keys().forEach { defaults.put(it, saved.get(it)) }
         defaults.put("theme", when (defaults.optString("theme")) { "light", "daylight" -> "light"; "system" -> "system"; "dark", "midnight", "nord", "amber" -> "dark"; else -> if (BuildConfig.FLAVOR == "tv") "dark" else "system" })
         val timePattern = Regex("([01][0-9]|2[0-3]):[0-5][0-9]")
@@ -1312,9 +1402,10 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
 
     /** 连续学习天数：截至今天（今天尚未学习时延续昨天）连续每天至少有 1 条作答或闪卡背诵记录。 */
     private fun computeStreakDays(child: String): Int {
-        val cutoff = startOfToday() - 366L * 86_400_000L
+        val todayStart = startOfToday(child)
+        val cutoff = todayStart - 366L * 86_400_000L
         val activeDays = HashSet<Int>()
-        val cal = DeviceClock.calendar(this)
+        val cal = calendarFor(child)
         readableDatabase.rawQuery(
             "SELECT ts FROM events WHERE child=? AND ts>=? AND type IN ('answer','flashcard')",
             arrayOf(child, cutoff.toString())
@@ -1326,7 +1417,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
             }
         }
         if (activeDays.isEmpty()) return 0
-        val cursor = DeviceClock.calendar(this).apply { timeInMillis = startOfToday() }
+        val cursor = calendarFor(child).apply { timeInMillis = todayStart }
         fun dayKey(c: Calendar) = c.get(Calendar.YEAR) * 10000 + (c.get(Calendar.MONTH) + 1) * 100 + c.get(Calendar.DAY_OF_MONTH)
         if (dayKey(cursor) !in activeDays) {
             cursor.add(Calendar.DAY_OF_YEAR, -1)
@@ -1343,7 +1434,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     /** 学习主页摘要卡片（Anki / 多邻国风格：连胜天数、今日题量、待复习、错题数、已掌握题数）。 */
     fun studySummary(child: String = activeChild()): JSONObject {
         val nowMs = System.currentTimeMillis()
-        val wrongOnly = config().optString("spacedScope") == "wrong_only"
+        val wrongOnly = config(child).optString("spacedScope") == "wrong_only"
         var totalQuestions = 0
         var dueCount = 0
         var wrongCount = 0
@@ -1367,15 +1458,14 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                 val dueAt = c.getLong(5)
                 if (lastCorrect == 0) wrongCount++
                 if (hasProgress && intervalDays >= 21) masteredCount++
-                val inSpacedScope = !wrongOnly || lastCorrect == 0 || answered > correct
-                if (hasProgress && dueAt <= nowMs && inSpacedScope) dueCount++
+                if (hasProgress && dueAt <= nowMs && inSpacedScope(wrongOnly, lastCorrect, answered, correct)) dueCount++
             }
         }
         var todayAnswered = 0
         var todayCorrect = 0
         readableDatabase.rawQuery(
             "SELECT payload FROM events WHERE child=? AND ts>=? AND type IN ('answer','flashcard')",
-            arrayOf(child, startOfToday().toString())
+            arrayOf(child, startOfToday(child).toString())
         ).use { c ->
             while (c.moveToNext()) {
                 todayAnswered++
@@ -1397,7 +1487,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
     fun learningAnalytics(days: Int = 14, child: String = activeChild()): JSONObject {
         val windowDays = days.coerceIn(7, 60)
         val nowMs = System.currentTimeMillis()
-        val todayStart = startOfToday()
+        val wrongOnly = config(child).optString("spacedScope") == "wrong_only"
+        val childZone = timeZoneFor(child)
+        val todayStart = startOfDayMillis(nowMs, childZone)
 
         class SubjectStat(val subject: String) {
             var total = 0; var answered = 0; var correct = 0; var wrong = 0; var mastered = 0
@@ -1412,9 +1504,9 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         val banks = LinkedHashMap<String, BankStat>()
         val hardCandidates = ArrayList<Pair<Long, JSONObject>>()
 
-        // 未来 7 天每天的起止时刻（按家长配置的时区切分日界线）
+        // 未来 7 天每天的起止时刻（按该孩子配置的时区切分日界线）
         val forecastBounds = Array(7) { offset ->
-            val dayStart = DeviceClock.calendar(this).apply {
+            val dayStart = Calendar.getInstance(childZone).apply {
                 timeInMillis = todayStart
                 add(Calendar.DAY_OF_YEAR, offset)
             }
@@ -1483,11 +1575,13 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                         intervalDays <= 20L -> young++
                         else -> mature++
                     }
-                    if (dueAt <= nowMs) dueNow++
-                    for (d in 0 until 7) {
-                        val (fStart, fEnd, _) = forecastBounds[d]
-                        val hit = if (d == 0) dueAt < fEnd else dueAt in fStart until fEnd
-                        if (hit) { forecastCounts[d]++; break }
+                    if (inSpacedScope(wrongOnly, lastCorrect, answered, correct)) {
+                        if (dueAt <= nowMs) dueNow++
+                        for (d in 0 until 7) {
+                            val (fStart, fEnd, _) = forecastBounds[d]
+                            val hit = if (d == 0) dueAt < fEnd else dueAt in fStart until fEnd
+                            if (hit) { forecastCounts[d]++; break }
+                        }
                     }
                 }
                 if (hasProgress || answered > 0) studiedQuestions++
@@ -1529,11 +1623,11 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         }
         val dayMap = LinkedHashMap<String, DayBucket>()
         val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
-            timeZone = DeviceClock.calendar(this@LocalStore).timeZone
+            timeZone = childZone
         }
         var earliestStart = todayStart
         for (ago in (querySpan - 1) downTo 0) {
-            val dCal = DeviceClock.calendar(this).apply {
+            val dCal = Calendar.getInstance(childZone).apply {
                 timeInMillis = todayStart
                 add(Calendar.DAY_OF_YEAR, -ago)
             }
@@ -1860,7 +1954,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         readableDatabase.rawQuery("SELECT k,v FROM kv", null).use { c ->
             while (c.moveToNext()) {
                 val k = c.getString(0) ?: continue
-                if (k in SECRET_KV_KEYS) continue
+                if (k in SECRET_KV_KEYS || isEphemeralKvKey(k)) continue
                 kvObj.put(k, c.getString(1) ?: "")
             }
         }
@@ -1982,6 +2076,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                 for (i in 0 until minOf(arr.length(), MAX_CHILDREN)) {
                     val c = arr.optJSONObject(i) ?: continue
                     val id = c.optString("id")
+                    if (!isValidChildId(id)) continue
                     val name = c.optString("name").trim().ifEmpty { "孩子${i + 1}" }.take(12)
                     db.insertWithOnConflict("children", null, ContentValues().apply {
                         put("id", id)
@@ -1996,9 +2091,10 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
                 val keys = kv.keys()
                 while (keys.hasNext()) {
                     val k = keys.next()
-                    if (k in SECRET_KV_KEYS) continue
+                    if (k in SECRET_KV_KEYS || isEphemeralKvKey(k)) continue
+                    val sanitized = sanitizeKvValueForLocalOnly(k, kv.optString(k, ""))
                     db.insertWithOnConflict("kv", null, ContentValues().apply {
-                        put("k", k); put("v", kv.optString(k, ""))
+                        put("k", k); put("v", sanitized)
                     }, if (replace) SQLiteDatabase.CONFLICT_REPLACE else SQLiteDatabase.CONFLICT_IGNORE)
                 }
             }
@@ -2121,9 +2217,7 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
 
             backup.optJSONObject("bankAutomation")?.let { ba ->
                 if (replace || rawGet("bank_automation").isEmpty()) {
-                    val next = JSONObject(ba.toString())
-                    next.remove("running")
-                    next.remove("status")
+                    val next = sanitizeBankAutomationForLocalOnly(ba)
                     rawSet("bank_automation", next.toString())
                 }
             }
@@ -2209,7 +2303,11 @@ class LocalStore(context: Context, databaseName: String = "studyontv.db") : SQLi
         return out
     }
 
-    fun startOfToday(): Long = DeviceClock.calendar(this).apply {
-        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-    }.timeInMillis
+    fun timeZoneFor(child: String = activeChild()): TimeZone =
+        resolveTimeZone(try { config(child).optString("timezone") } catch (_: Exception) { "" })
+
+    fun calendarFor(child: String = activeChild()): Calendar = Calendar.getInstance(timeZoneFor(child))
+
+    @JvmOverloads
+    fun startOfToday(child: String = activeChild()): Long = startOfDayMillis(System.currentTimeMillis(), timeZoneFor(child))
 }
