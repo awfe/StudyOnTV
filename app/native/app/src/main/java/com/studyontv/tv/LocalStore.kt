@@ -182,6 +182,170 @@ class LocalStore(
             timeInMillis = nowMs
             set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
         }.timeInMillis
+
+        /** 统一 SQL 范围过滤结果：全部值通过参数化占位符绑定，杜绝 SQL 注入。 */
+        internal data class SqlFilter(val clause: String, val args: List<String>)
+
+        /** 解析加练队列 JSON 数组，过滤空值并保序去重。 */
+        internal fun parseExtraQueue(raw: String): List<String> {
+            if (raw.isBlank()) return emptyList()
+            val arr = try { JSONArray(raw) } catch (_: Exception) { return emptyList() }
+            val out = LinkedHashSet<String>()
+            for (i in 0 until arr.length()) {
+                val id = arr.optString(i).trim()
+                if (id.isNotEmpty()) out.add(id)
+            }
+            return out.toList()
+        }
+
+        /** 将新增题号合并进加练队列（保序去重），返回合并后的队列与实际新增数。 */
+        internal fun mergeExtraQueue(existing: List<String>, additions: List<String>): Pair<List<String>, Int> {
+            val merged = LinkedHashSet<String>()
+            existing.forEach { id -> id.trim().takeIf { it.isNotEmpty() }?.let { merged.add(it) } }
+            val before = merged.size
+            additions.forEach { id -> id.trim().takeIf { it.isNotEmpty() }?.let { merged.add(it) } }
+            return merged.toList() to (merged.size - before)
+        }
+
+        /** 规范化 config.gradeSubjects：自动过滤空年级/超长键、科目去重，保留空数组（表示该年级全部科目）。 */
+        internal fun normalizeGradeSubjects(raw: JSONObject?): JSONObject {
+            val clean = JSONObject()
+            if (raw == null) return clean
+            val keys = raw.keys()
+            var gradeCount = 0
+            while (keys.hasNext() && gradeCount < 50) {
+                val rawKey = keys.next()
+                val grade = rawKey.trim()
+                if (grade.isEmpty() || grade.length > 32) continue
+                val arr = raw.optJSONArray(rawKey)
+                val cleanSubjects = JSONArray()
+                val seen = LinkedHashSet<String>()
+                if (arr != null) {
+                    for (i in 0 until minOf(arr.length(), 50)) {
+                        val sub = arr.optString(i).trim()
+                        if (sub.isNotEmpty() && sub.length <= 32 && seen.add(sub)) {
+                            cleanSubjects.put(sub)
+                        }
+                    }
+                }
+                clean.put(grade, cleanSubjects)
+                gradeCount++
+            }
+            return clean
+        }
+
+        /** 将 config.gradeSubjects 解析为保序 Map<年级, 科目列表>（空列表表示该年级不限科目）。 */
+        internal fun parseGradeSubjects(raw: JSONObject?): Map<String, List<String>> {
+            val normalized = normalizeGradeSubjects(raw)
+            val out = LinkedHashMap<String, List<String>>()
+            val keys = normalized.keys()
+            while (keys.hasNext()) {
+                val grade = keys.next()
+                val arr = normalized.optJSONArray(grade)
+                val subjects = ArrayList<String>()
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val sub = arr.optString(i).trim()
+                        if (sub.isNotEmpty()) subjects.add(sub)
+                    }
+                }
+                out[grade] = subjects
+            }
+            return out
+        }
+
+        /** 内存态主从范围匹配判断（与 buildScopeFilter SQL 语义严格一致）。 */
+        internal fun matchesGradeSubjects(
+            level: String,
+            subject: String,
+            gradeSubjects: Map<String, List<String>>,
+            selectedLevel: String = ""
+        ): Boolean {
+            if (gradeSubjects.isEmpty()) return true
+            if (selectedLevel.isNotEmpty()) {
+                if (level != selectedLevel) return false
+                val allowed = gradeSubjects[selectedLevel] ?: return false
+                return allowed.isEmpty() || subject in allowed
+            }
+            val allowed = gradeSubjects[level] ?: return false
+            return allowed.isEmpty() || subject in allowed
+        }
+
+        /**
+         * 构建题目范围 SQL 过滤片段（pickQuestion / pickDeck / distinctLevels / coverage 单一真理源）。
+         * - gradeSubjects 为空时 100% 沿用旧的 levels × subjects 笛卡尔积语义；
+         * - gradeSubjects 非空时按每个年级各自允许的科目精确匹配；若指定 selectedLevel 则只对该年级生效。
+         */
+        internal fun buildScopeFilter(
+            subjects: List<String> = emptyList(),
+            levels: List<String> = emptyList(),
+            selectedLevel: String = "",
+            banks: List<String> = emptyList(),
+            gradeSubjects: Map<String, List<String>> = emptyMap(),
+            explicitSubjectFilter: Boolean = false
+        ): SqlFilter {
+            fun ph(count: Int) = List(count) { "?" }.joinToString(",")
+            val where = StringBuilder()
+            val args = mutableListOf<String>()
+
+            if (gradeSubjects.isNotEmpty()) {
+                if (selectedLevel.isNotEmpty()) {
+                    val allowedSubjects = gradeSubjects[selectedLevel]
+                    if (allowedSubjects == null) {
+                        where.append(" AND 1=0")
+                    } else if (allowedSubjects.isEmpty()) {
+                        where.append(" AND questions.level=?")
+                        args.add(selectedLevel)
+                    } else {
+                        where.append(" AND (questions.level=? AND questions.subject IN (${ph(allowedSubjects.size)}))")
+                        args.add(selectedLevel)
+                        args.addAll(allowedSubjects)
+                    }
+                } else {
+                    val branches = mutableListOf<String>()
+                    for ((grade, allowedSubjects) in gradeSubjects) {
+                        if (allowedSubjects.isEmpty()) {
+                            branches.add("questions.level=?")
+                            args.add(grade)
+                        } else {
+                            branches.add("(questions.level=? AND questions.subject IN (${ph(allowedSubjects.size)}))")
+                            args.add(grade)
+                            args.addAll(allowedSubjects)
+                        }
+                    }
+                    if (branches.isNotEmpty()) {
+                        where.append(" AND (${branches.joinToString(" OR ")})")
+                    }
+                }
+                if (explicitSubjectFilter && subjects.isNotEmpty()) {
+                    where.append(" AND questions.subject IN (${ph(subjects.size)})")
+                    args.addAll(subjects)
+                }
+            } else {
+                if (subjects.isNotEmpty()) {
+                    where.append(" AND questions.subject IN (${ph(subjects.size)})")
+                    args.addAll(subjects)
+                }
+                if (levels.isNotEmpty()) {
+                    where.append(" AND questions.level IN (${ph(levels.size)})")
+                    args.addAll(levels)
+                }
+                if (selectedLevel.isNotEmpty()) {
+                    where.append(" AND questions.level=?")
+                    args.add(selectedLevel)
+                }
+            }
+
+            if (banks.isNotEmpty()) {
+                if ("默认题库" in banks) {
+                    where.append(" AND (questions.bank IN (${ph(banks.size)}) OR questions.bank='')")
+                } else {
+                    where.append(" AND questions.bank IN (${ph(banks.size)})")
+                }
+                args.addAll(banks)
+            }
+            return SqlFilter(where.toString(), args)
+        }
     }
 
     private val appContext: Context = context.applicationContext ?: context
@@ -815,6 +979,7 @@ class LocalStore(
             .put("learningContent", "quiz").put("educationalVideos", JSONArray()).put("videoMinutes", 1)
             .put("quizBanks", JSONArray())
             .put("quizSubjects", JSONArray()).put("quizLevels", JSONArray())
+            .put("gradeSubjects", JSONObject())
             .put("timePoints", JSONArray()).put("exemptWindows", JSONArray())
             .put("timezone", "")
             .put("version", 1)
@@ -841,6 +1006,7 @@ class LocalStore(
         if (defaults.optString("spacedScope") !in listOf("all", "wrong_only")) {
             defaults.put("spacedScope", "all")
         }
+        defaults.put("gradeSubjects", normalizeGradeSubjects(defaults.optJSONObject("gradeSubjects")))
         val snapshot = defaults.toString()
         configCache[child] = snapshot
         return JSONObject(snapshot)
@@ -1013,6 +1179,9 @@ class LocalStore(
             }
             next.put(key, clean)
         }
+        if (input.has("gradeSubjects")) {
+            next.put("gradeSubjects", normalizeGradeSubjects(input.optJSONObject("gradeSubjects")))
+        }
         if (input.has("weekSlots")) {
             val clean = normalizeWeek(input.optJSONArray("weekSlots")) ?: throw IllegalArgumentException("可用时段格式不正确")
             next.put("weekSlots", clean)
@@ -1055,28 +1224,20 @@ class LocalStore(
         subjects: List<String>,
         levels: List<String>,
         selectedLevel: String,
-        banks: List<String>
+        banks: List<String>,
+        gradeSubjects: Map<String, List<String>> = emptyMap(),
+        explicitSubjectFilter: Boolean = false
     ) {
-        if (subjects.isNotEmpty()) {
-            where.append(" AND questions.subject IN (${placeholders(subjects.size)})")
-            args.addAll(subjects)
-        }
-        if (levels.isNotEmpty()) {
-            where.append(" AND questions.level IN (${placeholders(levels.size)})")
-            args.addAll(levels)
-        }
-        if (selectedLevel.isNotEmpty()) {
-            where.append(" AND questions.level=?")
-            args.add(selectedLevel)
-        }
-        if (banks.isNotEmpty()) {
-            if ("默认题库" in banks) {
-                where.append(" AND (questions.bank IN (${placeholders(banks.size)}) OR questions.bank='')")
-            } else {
-                where.append(" AND questions.bank IN (${placeholders(banks.size)})")
-            }
-            args.addAll(banks)
-        }
+        val filter = buildScopeFilter(
+            subjects = subjects,
+            levels = levels,
+            selectedLevel = selectedLevel,
+            banks = banks,
+            gradeSubjects = gradeSubjects,
+            explicitSubjectFilter = explicitSubjectFilter
+        )
+        where.append(filter.clause)
+        args.addAll(filter.args)
     }
 
     private fun buildQuestionOrder(
@@ -1116,12 +1277,15 @@ class LocalStore(
         excludeId: String? = null,
         onlyWrong: Boolean = false,
         missedOnly: Boolean = false,
-        child: String = activeChild()
+        child: String = activeChild(),
+        gradeSubjects: Map<String, List<String>> = emptyMap(),
+        explicitSubjectFilter: Boolean = false
     ): JSONObject? {
         val items = pickDeck(
             count = 1, subjects = subjects, levels = levels, selectedLevel = selectedLevel,
             banks = banks, spaced = spaced, wrongFirst = wrongFirst, coverageFirst = coverageFirst,
-            newFirst = newFirst, excludeId = excludeId, onlyWrong = onlyWrong, missedOnly = missedOnly, child = child
+            newFirst = newFirst, excludeId = excludeId, onlyWrong = onlyWrong, missedOnly = missedOnly,
+            child = child, gradeSubjects = gradeSubjects, explicitSubjectFilter = explicitSubjectFilter
         )
         return if (items.length() > 0) items.getJSONObject(0) else null
     }
@@ -1142,11 +1306,13 @@ class LocalStore(
         excludeId: String? = null,
         onlyWrong: Boolean = false,
         missedOnly: Boolean = false,
-        child: String = activeChild()
+        child: String = activeChild(),
+        gradeSubjects: Map<String, List<String>> = emptyMap(),
+        explicitSubjectFilter: Boolean = false
     ): JSONArray {
         val where = StringBuilder("questions.enabled=1")
         val args = mutableListOf<String>()
-        appendScopeFilters(where, args, subjects, levels, selectedLevel, banks)
+        appendScopeFilters(where, args, subjects, levels, selectedLevel, banks, gradeSubjects, explicitSubjectFilter)
         if (!excludeId.isNullOrEmpty()) {
             where.append(" AND questions.id!=?")
             args.add(excludeId)
@@ -1176,11 +1342,13 @@ class LocalStore(
     fun distinctLevels(
         allowedLevels: List<String> = emptyList(),
         subjects: List<String> = emptyList(),
-        banks: List<String> = emptyList()
+        banks: List<String> = emptyList(),
+        gradeSubjects: Map<String, List<String>> = emptyMap(),
+        explicitSubjectFilter: Boolean = false
     ): List<String> {
         val where = StringBuilder("questions.enabled=1 AND TRIM(COALESCE(questions.level,''))!=''")
         val args = mutableListOf<String>()
-        appendScopeFilters(where, args, subjects, allowedLevels, "", banks)
+        appendScopeFilters(where, args, subjects, allowedLevels, "", banks, gradeSubjects, explicitSubjectFilter)
         val out = ArrayList<String>()
         readableDatabase.rawQuery(
             "SELECT DISTINCT questions.level FROM questions WHERE $where",
@@ -1192,6 +1360,217 @@ class LocalStore(
             }
         }
         return out.distinct().sorted()
+    }
+
+    /** 按题号读取单道题目（供精准加练队列优先出题使用）。 */
+    fun questionById(id: String, enabledOnly: Boolean = true, child: String = activeChild()): JSONObject? {
+        if (id.isBlank()) return null
+        val enabledClause = if (enabledOnly) " AND questions.enabled=1" else ""
+        val arr = readQuestions(
+            "SELECT questions.*,COALESCE(stats.presented,0) AS presented,COALESCE(stats.answered,0) AS answered_count," +
+                "COALESCE(stats.correct,0) AS correct_count,COALESCE(stats.last_correct,-1) AS last_correct " +
+                "FROM questions LEFT JOIN question_stats stats ON questions.id=stats.qid AND stats.child=? " +
+                "WHERE questions.id=?$enabledClause LIMIT 1",
+            arrayOf(child, id)
+        )
+        return if (arr.length() > 0) arr.getJSONObject(0) else null
+    }
+
+    /** 当前孩子的精准加练队列（KV JSON 数组，保序去重）。 */
+    fun extraQueue(child: String = activeChild()): List<String> =
+        parseExtraQueue(rawGet(scoped("extra_queue", child), "[]"))
+
+    /** 将有效且已启用的题号去重追加到当前孩子加练队列，返回实际新增条数。 */
+    fun addToExtraQueue(ids: List<String>, child: String = activeChild()): Int {
+        val cleaned = ids.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (cleaned.isEmpty()) return 0
+        val valid = LinkedHashSet<String>()
+        val chunkSize = 500
+        for (start in cleaned.indices step chunkSize) {
+            val chunk = cleaned.subList(start, minOf(start + chunkSize, cleaned.size))
+            readableDatabase.rawQuery(
+                "SELECT id FROM questions WHERE enabled=1 AND id IN (${placeholders(chunk.size)})",
+                chunk.toTypedArray()
+            ).use { c ->
+                while (c.moveToNext()) c.getString(0)?.let { valid.add(it) }
+            }
+        }
+        val orderedValid = cleaned.filter { it in valid }
+        if (orderedValid.isEmpty()) return 0
+        val existing = extraQueue(child)
+        val (merged, added) = mergeExtraQueue(existing, orderedValid)
+        if (added > 0) {
+            rawSet(scoped("extra_queue", child), JSONArray(merged).toString())
+        }
+        return added
+    }
+
+    /** 将指定题号移出当前孩子加练队列；若存在并移出返回 true。 */
+    fun popExtraQueue(id: String, child: String = activeChild()): Boolean {
+        val target = id.trim()
+        if (target.isEmpty()) return false
+        val existing = extraQueue(child)
+        if (target !in existing) return false
+        val remaining = existing.filter { it != target }
+        rawSet(scoped("extra_queue", child), JSONArray(remaining).toString())
+        return true
+    }
+
+    /** 清空当前孩子的精准加练队列。 */
+    fun clearExtraQueue(child: String = activeChild()) {
+        rawSet(scoped("extra_queue", child), "[]")
+    }
+
+    /**
+     * 错题库查询（ST-601 / #159）：以 question_stats.last_correct=0 为唯一真源，按孩子隔离。
+     */
+    fun listWrongQuestions(
+        subject: String? = null,
+        level: String? = null,
+        bank: String? = null,
+        q: String? = null,
+        child: String = activeChild()
+    ): JSONObject {
+        val where = StringBuilder("questions.enabled=1 AND stats.last_correct=0")
+        val args = mutableListOf(child)
+        if (!subject.isNullOrBlank()) {
+            where.append(" AND questions.subject=?")
+            args.add(subject.trim())
+        }
+        if (!level.isNullOrBlank()) {
+            where.append(" AND questions.level=?")
+            args.add(level.trim())
+        }
+        if (!bank.isNullOrBlank()) {
+            val b = bank.trim()
+            if (b == "默认题库") {
+                where.append(" AND (questions.bank=? OR questions.bank='')")
+            } else {
+                where.append(" AND questions.bank=?")
+            }
+            args.add(b)
+        }
+        val keyword = q?.trim()?.takeIf { it.isNotEmpty() }
+        if (keyword != null) {
+            val like = "%${escapeLike(keyword)}%"
+            where.append(" AND (questions.stem LIKE ? ESCAPE '\\' OR questions.tip LIKE ? ESCAPE '\\' OR questions.options LIKE ? ESCAPE '\\' OR questions.subject LIKE ? ESCAPE '\\' OR questions.level LIKE ? ESCAPE '\\')")
+            repeat(5) { args.add(like) }
+        }
+        val items = JSONArray()
+        readableDatabase.rawQuery(
+            "SELECT questions.*,COALESCE(stats.answered,0) AS answered_count," +
+                "COALESCE(stats.correct,0) AS correct_count,COALESCE(stats.last_at,0) AS last_at," +
+                "COALESCE(stats.last_correct,-1) AS last_correct " +
+                "FROM questions JOIN question_stats stats ON questions.id=stats.qid AND stats.child=? " +
+                "WHERE $where ORDER BY stats.last_at DESC, (stats.answered - stats.correct) DESC, questions.rowid DESC LIMIT 500",
+            args.toTypedArray()
+        ).use { c ->
+            while (c.moveToNext()) {
+                val details = c.getString(c.getColumnIndexOrThrow("details"))
+                val full = if (details.isNullOrEmpty()) JSONObject() else try { JSONObject(details) } catch (_: Exception) { JSONObject() }
+                val id = c.getString(c.getColumnIndexOrThrow("id"))
+                val stem = c.getString(c.getColumnIndexOrThrow("stem"))
+                val options = try { JSONArray(c.getString(c.getColumnIndexOrThrow("options"))) } catch (_: Exception) { JSONArray() }
+                val k = c.getInt(c.getColumnIndexOrThrow("answer"))
+                val tip = c.getString(c.getColumnIndexOrThrow("tip")) ?: ""
+                val subj = c.getString(c.getColumnIndexOrThrow("subject")) ?: ""
+                val lvl = c.getString(c.getColumnIndexOrThrow("level")) ?: ""
+                val bankName = (c.getString(c.getColumnIndexOrThrow("bank")) ?: "").ifBlank { full.optString("bank").ifBlank { "默认题库" } }
+                val type = (c.getString(c.getColumnIndexOrThrow("type")) ?: "").ifBlank { full.optString("type").ifBlank { "single" } }
+                full.put("a", options).put("k", k).put("type", type)
+                val answered = c.getInt(c.getColumnIndexOrThrow("answered_count"))
+                val correct = c.getInt(c.getColumnIndexOrThrow("correct_count"))
+                val lastAt = c.getLong(c.getColumnIndexOrThrow("last_at"))
+                val lastCorrect = c.getInt(c.getColumnIndexOrThrow("last_correct"))
+                val wrongCount = (answered - correct).coerceAtLeast(if (lastCorrect == 0) 1 else 0)
+                items.put(
+                    JSONObject()
+                        .put("id", id)
+                        .put("q", stem)
+                        .put("type", type)
+                        .put("subject", subj)
+                        .put("level", lvl)
+                        .put("bank", bankName)
+                        .put("options", options)
+                        .put("answer", LearningEngine.formatAnswerDisplay(full))
+                        .put("explain", tip)
+                        .put("answered", answered)
+                        .put("correct", correct)
+                        .put("wrongCount", wrongCount)
+                        .put("lastAt", lastAt)
+                        .put("lastCorrect", lastCorrect == 1)
+                )
+            }
+        }
+        val extraPool = rawGet(scoped("extra_pool", child), "0").toLongOrNull() ?: 0L
+        val extraQueueIds = extraQueue(child)
+        return JSONObject()
+            .put("items", items)
+            .put("total", items.length())
+            .put("extraPool", extraPool)
+            .put("extraQueueIds", JSONArray(extraQueueIds))
+    }
+
+    /**
+     * 非破坏性“标为已掌握”：不删除原题目，仅将 question_stats.last_correct 置为 1 并对齐 correct>=answered，
+     * 使 wrongCount 与 onlyWrong/missedOnly 查询均不再命中，同时将其移出 extra_queue。
+     */
+    fun markWrongMastered(ids: List<String> = emptyList(), all: Boolean = false, child: String = activeChild()): Int {
+        val db = writableDatabase
+        var updated = 0
+        db.beginTransaction()
+        try {
+            if (all) {
+                val masteredIds = ArrayList<String>()
+                db.rawQuery(
+                    "SELECT qid FROM question_stats WHERE child=? AND (last_correct=0 OR answered>correct)",
+                    arrayOf(child)
+                ).use { c ->
+                    while (c.moveToNext()) c.getString(0)?.let { masteredIds.add(it) }
+                }
+                val stmt = db.compileStatement(
+                    "UPDATE question_stats SET last_correct=1, correct=CASE WHEN correct<answered THEN answered ELSE correct END " +
+                        "WHERE child=? AND (last_correct=0 OR answered>correct)"
+                )
+                try {
+                    stmt.bindString(1, child)
+                    updated = stmt.executeUpdateDelete()
+                } finally {
+                    stmt.close()
+                }
+                if (masteredIds.isNotEmpty()) {
+                    val remaining = extraQueue(child).filter { it !in masteredIds.toSet() }
+                    rawSet(scoped("extra_queue", child), JSONArray(remaining).toString())
+                }
+            } else {
+                val cleaned = ids.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+                if (cleaned.isNotEmpty()) {
+                    val stmt = db.compileStatement(
+                        "UPDATE question_stats SET last_correct=1, correct=CASE WHEN correct<answered THEN answered ELSE correct END " +
+                            "WHERE qid=? AND child=? AND (last_correct=0 OR answered>correct)"
+                    )
+                    try {
+                        for (qid in cleaned) {
+                            stmt.clearBindings()
+                            stmt.bindString(1, qid)
+                            stmt.bindString(2, child)
+                            updated += stmt.executeUpdateDelete()
+                        }
+                    } finally {
+                        stmt.close()
+                    }
+                    val cleanedSet = cleaned.toSet()
+                    val existing = extraQueue(child)
+                    if (existing.any { it in cleanedSet }) {
+                        rawSet(scoped("extra_queue", child), JSONArray(existing.filter { it !in cleanedSet }).toString())
+                    }
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return updated
     }
 
     /** 供 AI 错题举一反三抽取典型薄弱题样本（优先当前错题，其次累计失误次数多的题）。 */
@@ -1357,18 +1736,27 @@ class LocalStore(
     /**
      * 答题覆盖：口径是当前孩子「答对过一次」（stats.correct>0），和出题时的覆盖优先用同一套判断。
      */
-    fun coverage(sample: Int = 20, child: String = activeChild()): JSONObject {
+    fun coverage(
+        sample: Int = 20,
+        child: String = activeChild(),
+        gradeSubjects: Map<String, List<String>> = emptyMap()
+    ): JSONObject {
         val banks = LinkedHashMap<String, IntArray>()
         val pending = ArrayList<JSONObject>()
         var total = 0
         var covered = 0
         var untouched = 0
+        val where = StringBuilder("questions.enabled=1")
+        val args = mutableListOf(child)
+        val filter = buildScopeFilter(gradeSubjects = gradeSubjects)
+        where.append(filter.clause)
+        args.addAll(filter.args)
         readableDatabase.rawQuery(
             "SELECT questions.id,questions.stem,questions.subject,questions.level,questions.bank," +
                 "COALESCE(stats.presented,0) AS presented,COALESCE(stats.answered,0) AS answered_count," +
                 "COALESCE(stats.correct,0) AS correct_count " +
-                "FROM questions LEFT JOIN question_stats stats ON questions.id=stats.qid AND stats.child=? WHERE questions.enabled=1",
-            arrayOf(child)
+                "FROM questions LEFT JOIN question_stats stats ON questions.id=stats.qid AND stats.child=? WHERE $where",
+            args.toTypedArray()
         ).use { c ->
             while (c.moveToNext()) {
                 val presented = c.getInt(5)

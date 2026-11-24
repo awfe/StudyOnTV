@@ -446,7 +446,38 @@ class LanServer(
             json(ctx, 200, store.questionMeta())
         }
         router.get("/api/coverage") { ctx ->
-            json(ctx, 200, store.coverage(ctx.query["sample"]?.toIntOrNull()?.coerceIn(1, 100) ?: 20))
+            val gradeSubjects = LocalStore.parseGradeSubjects(store.config().optJSONObject("gradeSubjects"))
+            json(ctx, 200, store.coverage(ctx.query["sample"]?.toIntOrNull()?.coerceIn(1, 100) ?: 20, gradeSubjects = gradeSubjects))
+        }
+        router.get("/api/wrong-questions") { ctx ->
+            val q = ctx.query
+            json(ctx, 200, store.listWrongQuestions(
+                subject = q["subject"],
+                level = q["level"],
+                bank = q["bank"],
+                q = q["q"]
+            ))
+        }
+        router.post("/api/wrong-questions/master") { ctx ->
+            val input = JSONObject(ctx.body.ifEmpty { "{}" })
+            val all = input.optBoolean("all", false)
+            val idsArr = input.optJSONArray("ids")
+            val ids = if (idsArr != null) (0 until idsArr.length()).map { idsArr.optString(it) }.filter { it.isNotBlank() } else emptyList()
+            val updated = store.markWrongMastered(ids = ids, all = all)
+            json(ctx, 200, JSONObject().put("ok", true).put("updated", updated).put("study", store.studySummary()))
+        }
+        router.post("/api/wrong-questions/extra-pool") { ctx ->
+            val input = JSONObject(ctx.body.ifEmpty { "{}" })
+            val idsArr = input.optJSONArray("ids") ?: JSONArray()
+            val ids = (0 until idsArr.length()).map { idsArr.optString(it) }.filter { it.isNotBlank() }
+            val result = DeviceRuntime.learning.addWrongToExtraPool(ids)
+            GateService.refreshNow()
+            json(ctx, 200, result)
+        }
+        router.post("/api/extra-pool/clear") { ctx ->
+            val result = DeviceRuntime.learning.clearExtraPool()
+            GateService.refreshNow()
+            json(ctx, 200, result)
         }
         router.post("/api/questions/pause") { ctx ->
             val input = JSONObject(ctx.body)
@@ -556,6 +587,10 @@ class LanServer(
             Updater.startCheck(context)
             json(ctx, 200, Updater.status(context))
         }
+        router.post("/api/update/install") { ctx ->
+            val (code, payload) = Updater.startRemoteInstall(context)
+            json(ctx, code, payload)
+        }
         router.post("/api/password") { ctx ->
             val input = JSONObject(ctx.body)
             if (!AdminAuth.verify(context, input.optString("current"))) {
@@ -574,11 +609,18 @@ class LanServer(
             val control = ctx.integration?.control == true
             if (!parent && !control) return@post json(ctx, 403, err("forbidden").put("message", "请先用管理密码登录"))
             val input = JSONObject(ctx.body.ifEmpty { "{}" })
-            if (input.optString("action") == "credit") {
+            val action = input.optString("action")
+            if (action == "clear_extra") {
+                val res = DeviceRuntime.learning.clearExtraPool()
+                store.logEvent("remote", JSONObject().put("action", action).put("cleared", res.optLong("cleared", 0L)).put("source", if (parent) "panel" else "integration"))
+                GateService.refreshNow()
+                return@post json(ctx, 200, JSONObject().put("learning", res.getJSONObject("learning")).put("cleared", res.getLong("cleared")))
+            }
+            if (action == "credit") {
                 val value = input.getDouble("minutes")
                 require(value.isFinite() && value == value.toInt().toDouble()) { "调整时长需要整数分钟" }
             }
-            val status = DeviceRuntime.learning.remote(input.optString("action"), input.optInt("minutes"), if (parent) "panel" else "integration")
+            val status = DeviceRuntime.learning.remote(action, input.optInt("minutes"), if (parent) "panel" else "integration")
             GateService.refreshNow()
             json(ctx, 200, JSONObject().put("learning", status))
         }

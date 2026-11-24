@@ -157,8 +157,14 @@ export default function DevicePanel({
   const update = useQuery({
     queryKey: ['update', sessionId],
     queryFn: () => api('/api/update'),
-    enabled: !localOnly,
-    refetchInterval: polling ? 2000 : false,
+    enabled: only === 'update' && !!device.data && !device.data.localOnly,
+    refetchInterval: query => {
+      const data = query.state.data as any;
+      if (data?.installState === 'downloading' || data?.installState === 'installing') {
+        return 1500;
+      }
+      return polling ? 2000 : false;
+    },
   });
   const [name, setName] = useState('');
   const nameSession = useRef<number | null>(null);
@@ -408,6 +414,16 @@ export default function DevicePanel({
     onError: (error: any) => toast.error(error.message),
   });
 
+  const installUpdate = useMutation({
+    mutationFn: () => api('/api/update/install', 'POST', {}),
+    onSuccess: (result: any) => {
+      client.setQueryData(['update', sessionId], result);
+      client.invalidateQueries({ queryKey: ['update', sessionId] });
+      toast.message('已开始在设备上下载更新包…');
+    },
+    onError: (error: any) => toast.error(error?.message || '触发在线更新失败'),
+  });
+
   const [password, setPassword] = useState({ current: '', next: '', confirm: '' });
   const changePassword = useMutation({
     mutationFn: () =>
@@ -486,6 +502,18 @@ export default function DevicePanel({
   const unlockCurl = `curl -X POST "${integrationBase}/api/remote" -H "Authorization: Bearer ${displayToken}" -H "Content-Type: application/json" -d '{"action":"unlock","minutes":30}'`;
   const haYaml = `sensor:\n  - platform: rest\n    name: 题了个题\n    resource: ${integrationBase}/api/state\n    headers:\n      Authorization: Bearer <集成令牌>\n    value_template: "{{ value_json.learning.remainingSeconds }}"\n    json_attributes:\n      - learning\n      - today\n    scan_interval: 60`;
   const updateInfo = update.data;
+  const installState = updateInfo?.installState as
+    | 'idle'
+    | 'downloading'
+    | 'installing'
+    | 'error'
+    | undefined;
+  const installProgress = Math.min(
+    100,
+    Math.max(0, Math.round(Number(updateInfo?.installProgress) || 0)),
+  );
+  const installMessage = String(updateInfo?.installMessage || '');
+  const installingNow = installState === 'downloading' || installState === 'installing';
   const failedSources = ((updateInfo?.log || []) as any[]).filter(item => item && !item.ok);
   const latestVer = updateInfo?.latest || '新版';
   const apkName =
@@ -1032,22 +1060,90 @@ export default function DevicePanel({
             <SettingItem
               title={updateInfo?.hasUpdate ? `有新版本 v${updateInfo.latest}` : '当前已是最新版本'}
               description={`上次检查：${formatTime(startedAt)}`}
+              wideControl
             >
-              <Button
-                variant="outline"
-                disabled={check.isPending || polling}
-                onClick={() => check.mutate()}
-              >
-                <RefreshCw className={polling ? 'animate-spin' : ''} />
-                {polling ? '检查中…' : '检查更新'}
-              </Button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {updateInfo?.hasUpdate && (
+                  <Button
+                    disabled={installUpdate.isPending || installingNow}
+                    onClick={() => installUpdate.mutate()}
+                  >
+                    {installUpdate.isPending || installingNow ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : (
+                      <Download />
+                    )}
+                    {installState === 'downloading'
+                      ? `下载中 ${installProgress}%`
+                      : installState === 'installing'
+                        ? '正在拉起安装…'
+                        : installState === 'error'
+                          ? '重试在线更新'
+                          : '立即在线更新'}
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  disabled={check.isPending || polling || installingNow}
+                  onClick={() => check.mutate()}
+                >
+                  <RefreshCw className={polling ? 'animate-spin' : ''} />
+                  {polling ? '检查中…' : '检查更新'}
+                </Button>
+              </div>
             </SettingItem>
+            {installState && installState !== 'idle' && (
+              <div className="space-y-2 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span
+                    className={
+                      installState === 'error'
+                        ? 'font-medium text-destructive'
+                        : installState === 'installing'
+                          ? 'font-medium text-emerald-600 dark:text-emerald-400'
+                          : 'font-medium text-foreground'
+                    }
+                  >
+                    {installMessage ||
+                      (installState === 'downloading'
+                        ? '正在设备上下载新版本安装包…'
+                        : installState === 'installing'
+                          ? '安装包已下载完成，请在设备屏幕上确认安装'
+                          : '在线更新失败，请检查设备网络后重试')}
+                  </span>
+                  {installState === 'downloading' && (
+                    <span className="tabular-nums text-muted-foreground">{installProgress}%</span>
+                  )}
+                  {installState === 'error' && updateInfo?.hasUpdate && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      disabled={installUpdate.isPending}
+                      onClick={() => installUpdate.mutate()}
+                    >
+                      重试
+                    </Button>
+                  )}
+                </div>
+                {(installState === 'downloading' || installState === 'installing') && (
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all duration-300"
+                      style={{ width: `${installState === 'installing' ? 100 : installProgress}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
             {updateInfo?.hasUpdate && (
               <SettingItem
                 title="更新说明"
                 description={updateInfo.notes?.replace(/\[force\]/gi, '').trim()}
               >
-                <span className="text-xs text-muted-foreground">在学习页右上角选择“更新”即可安装。</span>
+                <span className="text-xs text-muted-foreground">
+                  可点击上方「立即在线更新」推送到设备，或在设备学习页右上角选择「更新」安装。
+                </span>
               </SettingItem>
             )}
             {updateInfo?.installError && (
