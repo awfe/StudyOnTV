@@ -7,6 +7,8 @@ import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -74,7 +76,7 @@ class LocalStore(
     context: Context,
     databaseName: String = "studyontv.db",
     private val readClock: () -> DeviceClock.Reading = DeviceClock::read
-) : SQLiteOpenHelper(context, databaseName, null, 10) {
+) : SQLiteOpenHelper(context, databaseName, null, 11) {
     internal fun clockReading(): DeviceClock.Reading = readClock()
 
     companion object {
@@ -98,10 +100,58 @@ class LocalStore(
             "boot_quota_ms", "video_lesson"
         )
         private val CHILD_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,32}$")
+        private val pinRandom = SecureRandom()
         const val MAX_CHILDREN = 8
 
         internal fun isValidChildId(id: String): Boolean =
             id == DEFAULT_CHILD || CHILD_ID_PATTERN.matches(id)
+
+        /**
+         * 归一化孩子切换密码输入：
+         * - `null`：保持原密码不变
+         * - `""`（或全空白）：清空密码
+         * - 非空：校验长度为 1..16 位后返回去首尾空白的值
+         */
+        internal fun normalizeChildPin(raw: String?): String? {
+            if (raw == null) return null
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return ""
+            require(trimmed.length in 1..16) { "切换密码需要 1–16 位" }
+            return trimmed
+        }
+
+        internal fun generatePinSalt(): String =
+            ByteArray(16).also { pinRandom.nextBytes(it) }
+                .joinToString("") { "%02x".format(it) }
+
+        internal fun hashChildPin(pin: String, salt: String): String =
+            MessageDigest.getInstance("SHA-256")
+                .digest("$salt:$pin".toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+
+        internal fun verifyPinHash(pin: String, salt: String, expectedHash: String): Boolean {
+            val candidate = pin.trim()
+            if (candidate.isEmpty() || salt.isEmpty() || expectedHash.isEmpty()) return false
+            val actual = hashChildPin(candidate, salt)
+            return MessageDigest.isEqual(
+                actual.toByteArray(Charsets.UTF_8),
+                expectedHash.toByteArray(Charsets.UTF_8)
+            )
+        }
+
+        /** 对外序列化孩子档案：绝不下发 pin_hash / pin_salt / 原文，仅下发 hasPin。 */
+        internal fun childSummaryJson(
+            id: String,
+            name: String,
+            createdAt: Long,
+            active: Boolean,
+            hasPin: Boolean
+        ): JSONObject = JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("createdAt", createdAt)
+            .put("active", active)
+            .put("hasPin", hasPin)
 
         internal fun isEphemeralKvKey(key: String): Boolean {
             val base = if (key.startsWith("child:")) key.substringAfterLast(':') else key
@@ -402,6 +452,11 @@ class LocalStore(
             migrateQuestionStatsForChildren(db)
             migrateInlineMedia(db)
         }
+        if (oldVersion < 11) {
+            // 第 11 版（ST-610）：多孩子独立切换密码（加盐 SHA-256 哈希，默认空串表示未设密码）
+            addColumn(db, "children", "pin_hash", "TEXT NOT NULL DEFAULT ''")
+            addColumn(db, "children", "pin_salt", "TEXT NOT NULL DEFAULT ''")
+        }
     }
 
     override fun close() {
@@ -451,7 +506,7 @@ class LocalStore(
     }
 
     private fun createChildren(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE IF NOT EXISTS children(id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS children(id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, pin_hash TEXT NOT NULL DEFAULT '', pin_salt TEXT NOT NULL DEFAULT '')")
     }
 
     /** 旧的 question_progress 以 qid 为主键，多孩子后必须变成 (qid, child) 复合主键 */
@@ -856,9 +911,12 @@ class LocalStore(
         ensureDefaultChild()
         val active = activeChild()
         val out = JSONArray()
-        readableDatabase.rawQuery("SELECT id,name,created_at FROM children ORDER BY created_at,id", null).use {
-            while (it.moveToNext()) out.put(JSONObject().put("id", it.getString(0)).put("name", it.getString(1))
-                .put("createdAt", it.getLong(2)).put("active", it.getString(0) == active))
+        readableDatabase.rawQuery("SELECT id,name,created_at,pin_hash FROM children ORDER BY created_at,id", null).use {
+            while (it.moveToNext()) {
+                val id = it.getString(0)
+                val hasPin = !(it.getString(3).isNullOrEmpty())
+                out.put(childSummaryJson(id, it.getString(1), it.getLong(2), id == active, hasPin))
+            }
         }
         return out
     }
@@ -878,26 +936,66 @@ class LocalStore(
         return name
     }
 
-    fun createChild(raw: String): JSONObject {
+    fun createChild(raw: String, pin: String? = null): JSONObject {
         ensureDefaultChild()
         val name = validName(raw)
+        val normalizedPin = normalizeChildPin(pin)
         val count = readableDatabase.rawQuery("SELECT COUNT(*) FROM children", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
         require(count < MAX_CHILDREN) { "最多只能添加 $MAX_CHILDREN 个孩子" }
         val id = "c" + UUID.randomUUID().toString().replace("-", "").take(8)
+        val salt = if (!normalizedPin.isNullOrEmpty()) generatePinSalt() else ""
+        val hash = if (!normalizedPin.isNullOrEmpty()) hashChildPin(normalizedPin, salt) else ""
         // 新孩子沿用当前的规则（时长、时段、奖励…），不需要家长再配一遍；学习进度从零开始
         val inherited = rawGet(scoped("config"))
         writableDatabase.insertWithOnConflict("children", null, ContentValues().apply {
             put("id", id); put("name", name); put("created_at", System.currentTimeMillis())
+            put("pin_hash", hash); put("pin_salt", salt)
         }, SQLiteDatabase.CONFLICT_REPLACE)
         if (inherited.isNotEmpty()) rawSet("child:$id:config", inherited)
-        return JSONObject().put("id", id).put("name", name)
+        return JSONObject().put("id", id).put("name", name).put("hasPin", hash.isNotEmpty())
     }
 
-    fun renameChild(id: String, raw: String): JSONObject {
+    fun updateChild(id: String, raw: String, pin: String? = null): JSONObject {
+        ensureDefaultChild()
         val name = validName(raw, id)
-        val updated = writableDatabase.update("children", ContentValues().apply { put("name", name) }, "id=?", arrayOf(id))
+        val normalizedPin = normalizeChildPin(pin)
+        val cv = ContentValues().apply {
+            put("name", name)
+            when {
+                normalizedPin == null -> Unit // 不改动现有密码
+                normalizedPin.isEmpty() -> {
+                    put("pin_hash", "")
+                    put("pin_salt", "")
+                }
+                else -> {
+                    val salt = generatePinSalt()
+                    put("pin_hash", hashChildPin(normalizedPin, salt))
+                    put("pin_salt", salt)
+                }
+            }
+        }
+        val updated = writableDatabase.update("children", cv, "id=?", arrayOf(id))
         require(updated > 0) { "孩子档案不存在" }
-        return JSONObject().put("id", id).put("name", name)
+        return JSONObject().put("id", id).put("name", name).put("hasPin", childHasPin(id))
+    }
+
+    fun renameChild(id: String, raw: String): JSONObject = updateChild(id, raw, null)
+
+    fun childHasPin(childId: String): Boolean {
+        ensureDefaultChild()
+        return readableDatabase.rawQuery("SELECT pin_hash FROM children WHERE id=? LIMIT 1", arrayOf(childId)).use {
+            it.moveToFirst() && !(it.getString(0).isNullOrEmpty())
+        }
+    }
+
+    fun verifyChildPin(childId: String, pin: String): Boolean {
+        ensureDefaultChild()
+        val candidate = pin.trim()
+        if (candidate.isEmpty()) return false
+        return readableDatabase.rawQuery("SELECT pin_hash,pin_salt FROM children WHERE id=? LIMIT 1", arrayOf(childId)).use {
+            if (!it.moveToFirst()) return false
+            verifyPinHash(candidate, it.getString(1).orEmpty(), it.getString(0).orEmpty())
+        }
     }
 
     /** 删除孩子档案：连同他的学习记录、错题统计、复习进度、主观题批改和孤儿手写图一起清掉，题目本身保留 */

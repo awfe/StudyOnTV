@@ -419,9 +419,35 @@ export default function DevicePanel({
     onSuccess: (result: any) => {
       client.setQueryData(['update', sessionId], result);
       client.invalidateQueries({ queryKey: ['update', sessionId] });
-      toast.message('已开始在设备上下载更新包…');
+      const cap = result?.silentCapability ?? update.data?.silentCapability;
+      const silent = cap === 'device_owner' || cap === 'self_update';
+      if (result?.installState === 'installing' || update.data?.apkReady) {
+        toast.message(
+          silent ? '安装包已就绪，正在后台静默安装…' : '安装包已就绪，正在设备上拉起安装…',
+        );
+      } else {
+        toast.message('已开始在设备上下载更新包…');
+      }
     },
     onError: (error: any) => toast.error(error?.message || '触发在线更新失败'),
+  });
+
+  const updateSettings = useMutation({
+    mutationFn: (body: { autoDownload: boolean }) => api('/api/update', 'PUT', body),
+    onSuccess: (result: any, variables) => {
+      client.setQueryData(['update', sessionId], (old: any) =>
+        result && typeof result === 'object'
+          ? { ...old, ...result }
+          : old
+            ? { ...old, ...variables }
+            : result,
+      );
+      client.invalidateQueries({ queryKey: ['update', sessionId] });
+      const enabled =
+        typeof result?.autoDownload === 'boolean' ? result.autoDownload : variables.autoDownload;
+      toast.success(enabled ? '已开启自动后台下载更新包' : '已关闭自动后台下载更新包');
+    },
+    onError: (error: any) => toast.error(error?.message || '保存更新设置失败'),
   });
 
   const [password, setPassword] = useState({ current: '', next: '', confirm: '' });
@@ -501,19 +527,38 @@ export default function DevicePanel({
   const stateCurl = `curl "${integrationBase}/api/state" -H "Authorization: Bearer ${displayToken}"`;
   const unlockCurl = `curl -X POST "${integrationBase}/api/remote" -H "Authorization: Bearer ${displayToken}" -H "Content-Type: application/json" -d '{"action":"unlock","minutes":30}'`;
   const haYaml = `sensor:\n  - platform: rest\n    name: 题了个题\n    resource: ${integrationBase}/api/state\n    headers:\n      Authorization: Bearer <集成令牌>\n    value_template: "{{ value_json.learning.remainingSeconds }}"\n    json_attributes:\n      - learning\n      - today\n    scan_interval: 60`;
-  const updateInfo = update.data;
-  const installState = updateInfo?.installState as
-    | 'idle'
-    | 'downloading'
-    | 'installing'
-    | 'error'
+  const updateInfo = update.data as
+    | {
+        hasUpdate?: boolean;
+        latest?: string;
+        notes?: string;
+        url?: string;
+        checking?: boolean;
+        checkedAt?: number;
+        logAt?: number;
+        log?: any[];
+        installError?: string;
+        installState?: 'idle' | 'downloading' | 'installing' | 'error';
+        installProgress?: number;
+        installMessage?: string;
+        autoDownload?: boolean;
+        apkReady?: boolean;
+        downloadedVersion?: string;
+        silentCapability?: 'device_owner' | 'self_update' | 'confirm';
+      }
     | undefined;
+  const installState = updateInfo?.installState;
   const installProgress = Math.min(
     100,
     Math.max(0, Math.round(Number(updateInfo?.installProgress) || 0)),
   );
   const installMessage = String(updateInfo?.installMessage || '');
   const installingNow = installState === 'downloading' || installState === 'installing';
+  const silentCapability = updateInfo?.silentCapability;
+  const supportsSilentUpdate =
+    silentCapability === 'device_owner' || silentCapability === 'self_update';
+  const apkReady = Boolean(updateInfo?.hasUpdate && updateInfo?.apkReady);
+  const readyVersion = String(updateInfo?.downloadedVersion || updateInfo?.latest || '');
   const failedSources = ((updateInfo?.log || []) as any[]).filter(item => item && !item.ok);
   const latestVer = updateInfo?.latest || '新版';
   const apkName =
@@ -1059,7 +1104,20 @@ export default function DevicePanel({
             <>
             <SettingItem
               title={updateInfo?.hasUpdate ? `有新版本 v${updateInfo.latest}` : '当前已是最新版本'}
-              description={`上次检查：${formatTime(startedAt)}`}
+              description={
+                <span className="inline-flex flex-wrap items-center gap-2">
+                  <span>上次检查：{formatTime(startedAt)}</span>
+                  {apkReady && readyVersion && (
+                    <Badge
+                      variant="outline"
+                      className="bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300"
+                    >
+                      <Check />
+                      已预下载 v{readyVersion}
+                    </Badge>
+                  )}
+                </span>
+              }
               wideControl
             >
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1076,10 +1134,14 @@ export default function DevicePanel({
                     {installState === 'downloading'
                       ? `下载中 ${installProgress}%`
                       : installState === 'installing'
-                        ? '正在拉起安装…'
+                        ? supportsSilentUpdate
+                          ? '正在静默安装…'
+                          : '正在拉起安装…'
                         : installState === 'error'
                           ? '重试在线更新'
-                          : '立即在线更新'}
+                          : apkReady
+                            ? '立即安装（安装包已就绪）'
+                            : '立即在线更新'}
                   </Button>
                 )}
                 <Button
@@ -1092,6 +1154,41 @@ export default function DevicePanel({
                 </Button>
               </div>
             </SettingItem>
+            <SettingItem
+              title="自动后台下载更新包"
+              description="检测到新版本时自动在后台预下载并校验安装包，点击更新即可快速安装。"
+            >
+              <Switch
+                aria-label="自动后台下载更新包"
+                checked={!!updateInfo?.autoDownload}
+                disabled={updateSettings.isPending || !updateInfo}
+                onCheckedChange={autoDownload => updateSettings.mutate({ autoDownload })}
+              />
+            </SettingItem>
+            {silentCapability && (
+              <SettingItem
+                title="后台升级能力"
+                description={
+                  supportsSilentUpdate
+                    ? '后台自动完成安装，装完自动恢复服务。'
+                    : '支持 Web 端一键下载，下载完成后请在设备屏幕上确认安装。'
+                }
+              >
+                {supportsSilentUpdate ? (
+                  <Badge
+                    variant="outline"
+                    className="bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300"
+                  >
+                    <Check />
+                    支持官方静默更新
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="text-muted-foreground">
+                    需屏幕确认安装
+                  </Badge>
+                )}
+              </SettingItem>
+            )}
             {installState && installState !== 'idle' && (
               <div className="space-y-2 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -1108,7 +1205,9 @@ export default function DevicePanel({
                       (installState === 'downloading'
                         ? '正在设备上下载新版本安装包…'
                         : installState === 'installing'
-                          ? '安装包已下载完成，请在设备屏幕上确认安装'
+                          ? supportsSilentUpdate
+                            ? '安装包已就绪，正在后台静默安装，完成后将自动恢复服务'
+                            : '安装包已下载完成，请在设备屏幕上确认安装'
                           : '在线更新失败，请检查设备网络后重试')}
                   </span>
                   {installState === 'downloading' && (
@@ -1142,7 +1241,7 @@ export default function DevicePanel({
                 description={updateInfo.notes?.replace(/\[force\]/gi, '').trim()}
               >
                 <span className="text-xs text-muted-foreground">
-                  可点击上方「立即在线更新」推送到设备，或在设备学习页右上角选择「更新」安装。
+                  可点击上方「{apkReady ? '立即安装（安装包已就绪）' : '立即在线更新'}」推送到设备，或在设备学习页右上角选择「更新」安装。
                 </span>
               </SettingItem>
             )}

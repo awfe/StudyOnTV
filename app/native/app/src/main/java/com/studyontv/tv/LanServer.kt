@@ -122,6 +122,52 @@ class LanServer(
             ) -> true
             else -> false
         }
+
+        internal data class ChildSwitchDecision(
+            val allowed: Boolean,
+            val errorCode: String? = null,
+            val message: String? = null
+        )
+
+        /** 解析可选 pin 字段：未传或 null 返回 null（不改动）；传 "" 表示清空；非空返回字符串。 */
+        internal fun extractOptionalPin(input: JSONObject): String? =
+            if (input.has("pin") && !input.isNull("pin")) input.optString("pin", "") else null
+
+        /**
+         * 评估孩子切换权限（ST-610）：
+         * - 家长端已鉴权会话直接放行；
+         * - 切换到当前已激活孩子或未设密码的孩子直接放行；
+         * - 电视/平板学习页切换到已设密码的其他孩子时，必须携带该孩子的切换密码（或家长主密码兜底）。
+         */
+        internal fun evaluateChildSwitch(
+            targetId: String,
+            activeId: String,
+            isParent: Boolean,
+            targetHasPin: Boolean,
+            pin: String?,
+            verifyChildPin: (String) -> Boolean,
+            verifyParentPassword: (String) -> Boolean
+        ): ChildSwitchDecision {
+            if (isParent || targetId == activeId || !targetHasPin) {
+                return ChildSwitchDecision(allowed = true)
+            }
+            val candidate = pin?.trim().orEmpty()
+            if (candidate.isEmpty()) {
+                return ChildSwitchDecision(
+                    allowed = false,
+                    errorCode = "child_pin_required",
+                    message = "请输入该孩子的切换密码"
+                )
+            }
+            if (verifyChildPin(candidate) || verifyParentPassword(candidate)) {
+                return ChildSwitchDecision(allowed = true)
+            }
+            return ChildSwitchDecision(
+                allowed = false,
+                errorCode = "child_pin_invalid",
+                message = "切换密码错误，请重试"
+            )
+        }
     }
 
     private var socket: ServerSocket? = null
@@ -384,16 +430,36 @@ class LanServer(
             json(ctx, 200, JSONObject().put("items", store.children()).put("active", store.activeChild()))
         }
         router.post("/api/children") { ctx ->
-            val child = store.createChild(JSONObject(ctx.body).getString("name"))
+            val input = JSONObject(ctx.body)
+            val child = store.createChild(input.getString("name"), extractOptionalPin(input))
             json(ctx, 200, JSONObject().put("ok", true).put("child", child).put("items", store.children()))
         }
         router.put("/api/children") { ctx ->
             val input = JSONObject(ctx.body)
-            store.renameChild(input.getString("id"), input.getString("name"))
+            store.updateChild(input.getString("id"), input.getString("name"), extractOptionalPin(input))
             json(ctx, 200, JSONObject().put("ok", true).put("items", store.children()))
         }
         router.post("/api/children/switch") { ctx ->
-            DeviceRuntime.learning.switchChild(JSONObject(ctx.body).optString("id"))
+            val input = JSONObject(ctx.body)
+            val targetId = input.optString("id")
+            val decision = evaluateChildSwitch(
+                targetId = targetId,
+                activeId = store.activeChild(),
+                isParent = ctx.parent,
+                targetHasPin = store.childHasPin(targetId),
+                pin = extractOptionalPin(input),
+                verifyChildPin = { store.verifyChildPin(targetId, it) },
+                verifyParentPassword = { AdminAuth.verify(context, it) }
+            )
+            if (!decision.allowed) {
+                return@post json(
+                    ctx,
+                    403,
+                    err(decision.errorCode ?: "child_pin_invalid")
+                        .put("message", decision.message ?: "切换密码错误，请重试")
+                )
+            }
+            DeviceRuntime.learning.switchChild(targetId)
             GateService.refreshNow()
             json(ctx, 200, JSONObject().put("ok", true).put("items", store.children())
                 .put("active", store.activeChild()))

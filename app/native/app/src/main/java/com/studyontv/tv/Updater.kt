@@ -67,6 +67,90 @@ object Updater {
     internal const val INSTALLING_TTL_MS = 60_000L
     internal const val INSTALLING_RETRY_COOLDOWN_MS = 15_000L
 
+    const val SILENT_DEVICE_OWNER = "device_owner"
+    const val SILENT_SELF_UPDATE = "self_update"
+    const val SILENT_CONFIRM = "confirm"
+
+    /**
+     * 判断当前设备的官方合规静默更新能力（ST-607）：
+     * - Device Owner（Android 9+）：系统原生静默覆盖安装 -> "device_owner"
+     * - Android 12+（API 31+）且安装来源为自身包名：官方同源静默自更新 -> "self_update"
+     * - 其他情况：标准系统确认框 -> "confirm"
+     */
+    internal fun resolveSilentCapability(
+        isDeviceOwner: Boolean,
+        sdkInt: Int,
+        installerPackage: String?,
+        ownPackage: String
+    ): String = when {
+        isDeviceOwner -> SILENT_DEVICE_OWNER
+        sdkInt >= 31 && ownPackage.isNotBlank() && installerPackage == ownPackage -> SILENT_SELF_UPDATE
+        else -> SILENT_CONFIRM
+    }
+
+    fun silentCapability(ctx: Context): String {
+        val isOwner = try { UninstallGuard.owner(ctx) } catch (_: Exception) { false }
+        val ownPkg = try { ctx.packageName.orEmpty() } catch (_: Exception) { "" }
+        val installerPkg = if (Build.VERSION.SDK_INT >= 30 && ownPkg.isNotEmpty()) {
+            try {
+                ctx.packageManager.getInstallSourceInfo(ownPkg).installingPackageName
+            } catch (_: Exception) {
+                null
+            }
+        } else null
+        return resolveSilentCapability(isOwner, Build.VERSION.SDK_INT, installerPkg, ownPkg)
+    }
+
+    internal fun checkApkReady(
+        fileExists: Boolean,
+        fileLength: Long,
+        expectedVersion: String,
+        expectedSha256: String,
+        savedVersion: String,
+        savedSha256: String
+    ): Boolean {
+        val targetVer = expectedVersion.trim()
+        if (!fileExists || fileLength <= 0L || targetVer.isEmpty()) return false
+        if (savedVersion.trim() != targetVer) return false
+        val wantSha = expectedSha256.trim()
+        if (wantSha.isNotEmpty() && !savedSha256.trim().equals(wantSha, ignoreCase = true)) return false
+        return true
+    }
+
+    fun isApkReady(ctx: Context, info: Info?): Boolean {
+        if (LocalOnlyGuard.enabled || info == null) return false
+        val f = ApkInstaller.apkFile(ctx)
+        val exists = f.exists() && f.isFile
+        return checkApkReady(
+            fileExists = exists,
+            fileLength = if (exists) f.length() else 0L,
+            expectedVersion = info.latest,
+            expectedSha256 = info.sha256,
+            savedVersion = Prefs.readyApkVersion(ctx),
+            savedSha256 = Prefs.readyApkSha256(ctx)
+        )
+    }
+
+    internal fun markApkReady(ctx: Context, version: String, sha256: String) {
+        Prefs.setReadyApkVersion(ctx, version.trim())
+        Prefs.setReadyApkSha256(ctx, sha256.trim())
+    }
+
+    internal fun clearReadyApk(ctx: Context) {
+        Prefs.setReadyApkVersion(ctx, "")
+        Prefs.setReadyApkSha256(ctx, "")
+    }
+
+    internal fun resolveAutoDownloadSetting(requested: Boolean, localOnly: Boolean): Boolean =
+        if (localOnly) false else requested
+
+    internal fun shouldPreDownload(
+        localOnly: Boolean,
+        autoDownload: Boolean,
+        newerInfo: Info?,
+        apkReady: Boolean
+    ): Boolean = !localOnly && autoDownload && newerInfo != null && newerInfo.url.isNotBlank() && !apkReady
+
     private val installSnapshotRef = AtomicReference(InstallSnapshot())
 
     internal fun currentInstallSnapshot(nowMs: Long = System.currentTimeMillis()): InstallSnapshot {
@@ -89,8 +173,38 @@ object Updater {
         message: String,
         version: String,
         nowMs: Long = System.currentTimeMillis()
-    ) {
-        installSnapshotRef.set(InstallSnapshot(state, progress.coerceIn(0, 100), message, version, nowMs))
+    ): InstallSnapshot {
+        val next = InstallSnapshot(state, progress.coerceIn(0, 100), message, version, nowMs)
+        installSnapshotRef.set(next)
+        return next
+    }
+
+    internal fun compareAndUpdateInstallState(
+        expected: InstallSnapshot,
+        state: String,
+        progress: Int,
+        message: String,
+        version: String,
+        nowMs: Long = System.currentTimeMillis()
+    ): Boolean = installSnapshotRef.compareAndSet(
+        expected,
+        InstallSnapshot(state, progress.coerceIn(0, 100), message, version, nowMs)
+    )
+
+    internal fun onInstallPendingUserAction(nowMs: Long = System.currentTimeMillis()) {
+        val cur = currentInstallSnapshot(nowMs)
+        if (cur.state == "installing") {
+            updateInstallState("installing", 100, "安装包已就绪，请在设备屏幕上确认安装", cur.version, nowMs)
+        }
+    }
+
+    internal fun onInstallResult(success: Boolean, message: String = "", nowMs: Long = System.currentTimeMillis()) {
+        val cur = currentInstallSnapshot(nowMs)
+        if (success) {
+            resetInstallState()
+        } else {
+            updateInstallState("error", 100, message.ifBlank { "安装失败" }, cur.version, nowMs)
+        }
     }
 
     /** 校验是否允许发起远程在线更新；返回 null 表示通过，否则返回 (HTTP 状态码, 错误文案)。 */
@@ -106,7 +220,11 @@ object Updater {
      * - downloading 期间严格拒绝并发重入；
      * - installing 期间在冷却期内拒绝重入，超过冷却期（用户取消安装或系统静默拦截后台拉起）允许重新发起。
      */
-    internal fun tryBeginInstall(version: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+    internal fun tryBeginInstall(
+        version: String,
+        nowMs: Long = System.currentTimeMillis(),
+        message: String = "正在准备下载 v$version…"
+    ): Boolean {
         while (true) {
             val current = installSnapshotRef.get()
             if (current.state == "downloading") return false
@@ -118,12 +236,60 @@ object Updater {
             val next = InstallSnapshot(
                 state = "downloading",
                 progress = 0,
-                message = "正在准备下载 v$version…",
+                message = message,
                 version = version,
                 updatedAtMs = nowMs
             )
             if (installSnapshotRef.compareAndSet(current, next)) return true
         }
+    }
+
+    /**
+     * 发现新版本且家长开启了「后台自动预下载」时，静默在后台下载并校验 APK 到本地缓存（ST-607）。
+     * 与 [startRemoteInstall] 共享 CAS 防并发重入；预下载完成后回到 idle，不弹窗打扰。
+     */
+    fun preDownloadIfNeeded(ctx: Context, info: Info?) {
+        val newer = newerThanCurrent(ctx, info)
+        val autoEnabled = resolveAutoDownloadSetting(Prefs.autoDownloadUpdate(ctx), LocalOnlyGuard.enabled)
+        if (!shouldPreDownload(LocalOnlyGuard.enabled, autoEnabled, newer, isApkReady(ctx, newer))) {
+            return
+        }
+        val targetInfo = newer!!
+        if (!tryBeginInstall(targetInfo.latest, message = "正在后台预下载 v${targetInfo.latest}…")) {
+            return
+        }
+        val appCtx = ctx.applicationContext ?: ctx
+        Thread {
+            try {
+                Diag.info("Update", "starting background pre-download for v${targetInfo.latest}")
+                val file = ApkInstaller.download(
+                    appCtx,
+                    targetInfo.url,
+                    targetInfo.sha256,
+                    onSource = { src ->
+                        val cur = currentInstallSnapshot()
+                        if (cur.state == "downloading") {
+                            updateInstallState("downloading", cur.progress, "正在后台从 $src 预下载 v${targetInfo.latest}…", targetInfo.latest)
+                        }
+                    },
+                    onProgress = { percent ->
+                        val pct = if (percent < 0) currentInstallSnapshot().progress else percent.coerceIn(0, 100)
+                        val msg = if (percent < 0) "正在后台预下载 v${targetInfo.latest}…" else "正在后台预下载 v${targetInfo.latest} ($pct%)"
+                        updateInstallState("downloading", pct, msg, targetInfo.latest)
+                    }
+                )
+                if (file != null) {
+                    markApkReady(appCtx, targetInfo.latest, targetInfo.sha256.ifBlank { ApkInstaller.lastDownloadSha256 })
+                    Diag.info("Update", "background pre-download ready for v${targetInfo.latest}")
+                } else {
+                    Diag.warn("Update", "background pre-download failed: ${ApkInstaller.lastError}")
+                }
+                resetInstallState()
+            } catch (e: Exception) {
+                Diag.warn("Update", "background pre-download error: ${e.javaClass.simpleName} ${e.message}")
+                resetInstallState()
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     internal fun appendInstallStatus(target: JSONObject, snap: InstallSnapshot = currentInstallSnapshot()): JSONObject =
@@ -151,14 +317,16 @@ object Updater {
         Thread {
             try {
                 val cachedApk = ApkInstaller.apkFile(appCtx)
+                val expectedSha = targetInfo.sha256.ifBlank { Prefs.readyApkSha256(appCtx) }
                 val readyFile = if (
-                    ApkInstaller.alreadyDownloaded(appCtx, 0) &&
-                    UpdateActivity.isCachedApkMatching(cachedApk, targetInfo.sha256, deleteOnMismatch = true)
+                    isApkReady(appCtx, targetInfo) &&
+                    UpdateActivity.isCachedApkMatching(cachedApk, expectedSha, deleteOnMismatch = true)
                 ) {
-                    updateInstallState("downloading", 100, "已命中本地校验通过的安装包 v${targetInfo.latest}", targetInfo.latest)
+                    updateInstallState("installing", 100, "已命中本地预下载安装包 v${targetInfo.latest}，跳过下载直接安装", targetInfo.latest)
                     cachedApk
                 } else {
-                    ApkInstaller.download(
+                    clearReadyApk(appCtx)
+                    val downloaded = ApkInstaller.download(
                         appCtx,
                         targetInfo.url,
                         targetInfo.sha256,
@@ -174,6 +342,10 @@ object Updater {
                             updateInstallState("downloading", pct, msg, targetInfo.latest)
                         }
                     )
+                    if (downloaded != null) {
+                        markApkReady(appCtx, targetInfo.latest, targetInfo.sha256.ifBlank { ApkInstaller.lastDownloadSha256 })
+                    }
+                    downloaded
                 }
 
                 if (readyFile == null) {
@@ -182,7 +354,22 @@ object Updater {
                     return@Thread
                 }
 
-                updateInstallState("installing", 100, "安装包已下载完成，正在拉起设备安装界面…", targetInfo.latest)
+                val capability = silentCapability(appCtx)
+                if (capability == SILENT_DEVICE_OWNER || capability == SILENT_SELF_UPDATE) {
+                    val beforeSubmit = updateInstallState("installing", 100, "正在后台静默安装 v${targetInfo.latest}…", targetInfo.latest)
+                    Prefs.setUpdateInProgress(appCtx, true)
+                    val submitted = try { ApkInstaller.install(appCtx, readyFile) } catch (_: Exception) { false }
+                    if (submitted) {
+                        compareAndUpdateInstallState(beforeSubmit, "installing", 100, "已提交后台静默更新 v${targetInfo.latest}，安装完成后服务将自动恢复", targetInfo.latest)
+                    } else {
+                        Prefs.setUpdateInProgress(appCtx, false)
+                        val reason = ApkInstaller.lastError.ifBlank { "后台提交安装会话失败，请在设备上手动完成安装" }
+                        compareAndUpdateInstallState(beforeSubmit, "error", 100, reason, targetInfo.latest)
+                    }
+                    return@Thread
+                }
+
+                val beforeLaunch = updateInstallState("installing", 100, "安装包已下载完成，正在拉起设备安装界面…", targetInfo.latest)
                 GateService.allowInstallPage()
                 val launched = try {
                     val intent = Intent(appCtx, UpdateActivity::class.java).apply {
@@ -199,14 +386,14 @@ object Updater {
                 }
 
                 if (launched) {
-                    updateInstallState("installing", 100, "安装包已下载完成，请在设备屏幕上确认安装", targetInfo.latest)
+                    compareAndUpdateInstallState(beforeLaunch, "installing", 100, "安装包已下载完成，请在设备屏幕上确认安装", targetInfo.latest)
                 } else {
                     val fallbackOk = try { ApkInstaller.install(appCtx, readyFile) } catch (_: Exception) { false }
                     if (fallbackOk) {
-                        updateInstallState("installing", 100, "安装包已提交系统安装器，请在设备屏幕上确认安装", targetInfo.latest)
+                        compareAndUpdateInstallState(beforeLaunch, "installing", 100, "安装包已提交系统安装器，请在设备屏幕上确认安装", targetInfo.latest)
                     } else {
                         val reason = ApkInstaller.lastError.ifBlank { "系统限制了后台拉起安装界面，请在电视/平板上打开应用完成安装" }
-                        updateInstallState("error", 100, reason, targetInfo.latest)
+                        compareAndUpdateInstallState(beforeLaunch, "error", 100, reason, targetInfo.latest)
                     }
                 }
             } catch (e: Exception) {
@@ -251,6 +438,7 @@ object Updater {
         Prefs.setUpdateInfo(ctx, info?.let { toJson(it).toString() } ?: "")
         Prefs.setUpdateCheckedAt(ctx, System.currentTimeMillis())
         Prefs.setUpdateLog(ctx, JSONObject().put("at", System.currentTimeMillis()).put("items", log).toString())
+        preDownloadIfNeeded(ctx, info)
         return info to log
     }
 
@@ -333,6 +521,9 @@ object Updater {
                 InstallSnapshot()
             } else cur
         }
+        val autoDownload = resolveAutoDownloadSetting(Prefs.autoDownloadUpdate(ctx), LocalOnlyGuard.enabled)
+        val apkReady = hasUpdate && isApkReady(ctx, info)
+        val downloadedVersion = if (apkReady) info?.latest.orEmpty() else ""
         val log = try { JSONObject(Prefs.updateLog(ctx)) } catch (_: Exception) { JSONObject() }
         return appendInstallStatus(
             JSONObject().put("current", currentVersion(ctx))
@@ -345,6 +536,10 @@ object Updater {
                 .put("lastDownloadSource", Prefs.updateLastSource(ctx))
                 .put("canInstall", ApkInstaller.canInstall(ctx))
                 .put("installError", Prefs.updateInstallError(ctx))
+                .put("autoDownload", autoDownload)
+                .put("apkReady", apkReady)
+                .put("downloadedVersion", downloadedVersion)
+                .put("silentCapability", silentCapability(ctx))
                 .put("log", log.optJSONArray("items") ?: JSONArray()),
             snap
         )
@@ -364,7 +559,16 @@ object Updater {
             require(clean.size <= 10) { "最多填写 10 个镜像" }
             Prefs.setUpdateMirrors(ctx, if (input.optBoolean("resetMirrors")) null else clean.joinToString("\n"))
         }
-        Prefs.setUpdateCheckedAt(ctx, 0)
+        if (input.has("autoDownload")) {
+            val effective = resolveAutoDownloadSetting(input.optBoolean("autoDownload", false), LocalOnlyGuard.enabled)
+            Prefs.setAutoDownloadUpdate(ctx, effective)
+            if (effective) {
+                preDownloadIfNeeded(ctx, cachedInfo(ctx))
+            }
+        }
+        if (input.has("api") || input.has("mirrors")) {
+            Prefs.setUpdateCheckedAt(ctx, 0)
+        }
         return status(ctx)
     }
 }

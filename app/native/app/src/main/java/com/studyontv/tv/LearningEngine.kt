@@ -246,7 +246,35 @@ class LearningEngine(
             }
         }
 
-        private val CJK_GAP_REGEX = Regex("(?<=[\\p{IsHan}])\\s+(?=[\\p{IsHan}])")
+        private fun isCjkChar(c: Char): Boolean =
+            c in '\u4E00'..'\u9FFF' || c in '\u3400'..'\u4DBF' || c in '\uF900'..'\uFAFF'
+
+        /**
+         * 去掉两个汉字之间的空白字符。
+         * 纯字符区间循环实现，避免 Android ICU 正则不支持 OpenJDK 的 `\p{IsHan}` 导致 `<clinit>` 闪退（ST-608）。
+         */
+        internal fun collapseCjkSpaces(text: String): String {
+            if (text.isEmpty()) return ""
+            val sb = StringBuilder(text.length)
+            var i = 0
+            while (i < text.length) {
+                val c = text[i]
+                if (c.isWhitespace()) {
+                    var j = i + 1
+                    while (j < text.length && text[j].isWhitespace()) j++
+                    val prevIsCjk = sb.isNotEmpty() && isCjkChar(sb[sb.length - 1])
+                    val nextIsCjk = j < text.length && isCjkChar(text[j])
+                    if (!(prevIsCjk && nextIsCjk)) {
+                        sb.append(text, i, j)
+                    }
+                    i = j
+                } else {
+                    sb.append(c)
+                    i++
+                }
+            }
+            return sb.toString()
+        }
 
         internal fun normalizeTextExact(value: String): String =
             Normalizer.normalize(value.trim(), Normalizer.Form.NFKC)
@@ -282,10 +310,11 @@ class LearningEngine(
                     type == Character.FINAL_QUOTE_PUNCTUATION
                 sb.append(if (isPunctuation) ' ' else c)
             }
-            return sb.toString()
-                .trim()
-                .replace(Regex("\\s+"), " ")
-                .replace(CJK_GAP_REGEX, "")
+            return collapseCjkSpaces(
+                sb.toString()
+                    .trim()
+                    .replace(Regex("\\s+"), " ")
+            )
         }
 
         internal fun matchesTextAnswer(actual: String, expected: String): Boolean {
