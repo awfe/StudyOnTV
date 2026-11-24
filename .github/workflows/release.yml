@@ -187,7 +187,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           cp update.json "$RUNNER_TEMP/update.json"
           git fetch origin main
-          git checkout -B main origin/main
+          git checkout -f -B main origin/main
           cp "$RUNNER_TEMP/update.json" update.json
           git add update.json
           git diff --staged --quiet || git commit -m "release: ${TAG} 更新清单 [skip ci]"
