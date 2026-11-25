@@ -52,6 +52,24 @@ object ApkInstaller {
         return out
     }
 
+    /** 当部分 Android 9/10 ROM 的 getPackageArchiveInfo 未填充签名时，直接从 APK JAR 条目读取证书兜底 */
+    private fun jarSignatures(file: File): Set<String> {
+        return try {
+            java.util.jar.JarFile(file, true).use { jar ->
+                val entry = jar.getJarEntry("AndroidManifest.xml") ?: return emptySet()
+                jar.getInputStream(entry).use { stream ->
+                    val buf = ByteArray(8192)
+                    while (stream.read(buf) > 0) { /* 必须读完流 JarEntry.certificates 才会填充 */ }
+                }
+                val certs = entry.certificates ?: return emptySet()
+                val md = java.security.MessageDigest.getInstance("SHA-256")
+                certs.map { c -> md.digest(c.encoded).joinToString("") { b -> "%02x".format(b) } }.toSet()
+            }
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
+
     /**
      * 只做「能读到且确实不同」的提前拒绝。
      *
@@ -62,6 +80,9 @@ object ApkInstaller {
         if (mine.isEmpty() || theirs.isEmpty()) return null
         return if (mine.intersect(theirs).isEmpty()) "安装包签名与当前版本不一致，已拒绝" else null
     }
+
+    internal fun validateSignatureSets(mine: Set<String>, theirs: Set<String>): String? =
+        signatureVerdict(mine, theirs)
 
     internal fun checkLocalOnlyBlocked(localOnly: Boolean = LocalOnlyGuard.enabled): String? =
         if (localOnly) "仅本地隐私版（EU Local-Only）已禁用应用内下载与安装" else null
@@ -75,16 +96,20 @@ object ApkInstaller {
     /** 包名一致、版本更高、签名与当前安装的版本一致（无副作用，返回错误文案，null 表示通过） */
     @Suppress("DEPRECATION")
     private fun validateArchive(ctx: Context, file: File): String? {
-        val flags = if (Build.VERSION.SDK_INT >= 28) android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES else android.content.pm.PackageManager.GET_SIGNATURES
+        val flags = if (Build.VERSION.SDK_INT >= 28) {
+            android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES or android.content.pm.PackageManager.GET_SIGNATURES
+        } else {
+            android.content.pm.PackageManager.GET_SIGNATURES
+        }
         val archive = ctx.packageManager.getPackageArchiveInfo(file.absolutePath, flags) ?: return "安装包损坏或不完整"
         archive.applicationInfo?.let { it.sourceDir = file.absolutePath; it.publicSourceDir = file.absolutePath }
         val current = ctx.packageManager.getPackageInfo(ctx.packageName, flags)
         if (archive.packageName != ctx.packageName) return "安装包与本应用不符"
         if (archive.versionCode <= current.versionCode) return "安装包版本不比当前新"
         val mine = signatures(current)
-        val theirs = signatures(archive)
+        val theirs = signatures(archive).ifEmpty { jarSignatures(file) }
         if (mine.isEmpty() || theirs.isEmpty()) {
-            Diag.warn("Update", "signature info unavailable (installed=${mine.size}, archive=${theirs.size}); deferring to system installer")
+            Diag.warn("Update", "signature info unavailable (installed=${mine.size}, archive=${theirs.size}, sdk=${Build.VERSION.SDK_INT}); deferring to system installer")
         }
         return signatureVerdict(mine, theirs)
     }

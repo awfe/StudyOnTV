@@ -277,12 +277,10 @@
     if ($('pinTitle')) $('pinTitle').textContent = '切换到「' + state.pinTarget.name + '」';
     if (err) err.textContent = errorMsg || '';
     input.value = '';
-    input.readOnly = isTv();
+    input.readOnly = true;
+    input.setAttribute('inputmode', 'none');
     modal.className = 'pin-modal show';
-    focusDefault();
-    if (!isTv()) {
-      try { input.focus(); } catch (e) {}
-    }
+    setFocus(0);
   }
   function closePinModal() {
     var modal = $('pinModal'), input = $('pinInput'), err = $('pinError');
@@ -784,6 +782,8 @@
     $('qMode').textContent = (round.extra ? '加练任务' : round.focus === 'wrong' ? '错题闯关' : round.focus === 'due' ? '记忆复习' : round.mode === 'streak' ? '连续答对' : round.mode === 'count' ? '答对指定题数' : round.mode === 'practice' ? '自由练习' : '本组任务') + ' · ' + renderStars(item.difficulty);
     $('qPool').textContent = round.extraPool > 0 ? '加练池还剩 ' + round.extraPool + ' 题' : '';
     $('qDots').textContent = round.mode === 'streak' ? '连续答对 ' + round.streak + ' 题' : '';
+    var backHubBtn = $('quizBackHubBtn');
+    if (backHubBtn) backHubBtn.style.display = isHubAvailable() ? '' : 'none';
     var qLength = speakable(item.q).length;
     $('qText').className = 'question' + (qLength > 120 ? ' longer' : qLength > 56 ? ' long' : '');
     if (item.listen) {
@@ -998,11 +998,17 @@
     }
     if (window.SOTV_RICH && result.tip) window.SOTV_RICH($('fbTip'), '解析：' + result.tip);
     else $('fbTip').textContent = result.tip ? '解析：' + result.tip : '';
-    // 「题目、选项和答案」：作答之后再读正确答案，作答前不剧透
-    if (state.speech && state.speech.autoRead && readScope() === 'questionOptionsAnswer') {
-      var spokenAnswer = written ? speakable(result.answerText || '')
-        : (result.correctIndices || []).map(function (i) { return formatSpokenOption(item, i); }).join('，');
-      if (spokenAnswer) nativeCall('readInLanguage', ['正确答案：' + spokenAnswer, item.language || '']);
+    // 作答后自动朗读：按朗读范围读正确答案，并且只要有解析就统一朗读解析
+    if (state.speech && state.speech.autoRead) {
+      var fbParts = [];
+      if (readScope() === 'questionOptionsAnswer') {
+        var spokenAnswer = written ? speakable(result.answerText || '')
+          : (result.correctIndices || []).map(function (i) { return formatSpokenOption(item, i); }).join('，');
+        if (spokenAnswer) fbParts.push('正确答案：' + spokenAnswer);
+      }
+      var spokenTip = result.tip ? speakable(result.tip) : '';
+      if (spokenTip) fbParts.push('解析：' + spokenTip);
+      if (fbParts.length) nativeCall('readInLanguage', [fbParts.join('。'), item.language || '']);
     }
     var fbRead = $('fbReadAloud');
     if (fbRead) {
@@ -1274,7 +1280,14 @@
   function setFocus(index) {
     var list = focusables();
     all('.focused').forEach(function (el) { el.classList.remove('focused'); });
-    if (list[index]) { list[index].classList.add('focused'); reveal(list[index]); state.focusKey = focusKey(list[index]); }
+    if (list[index]) {
+      list[index].classList.add('focused');
+      reveal(list[index]);
+      state.focusKey = focusKey(list[index]);
+      if (list[index].tagName !== 'INPUT' && list[index].tagName !== 'TEXTAREA') {
+        try { list[index].focus({ preventScroll: true }); } catch (e) { try { list[index].focus(); } catch (e2) {} }
+      }
+    }
   }
   function focusKey(el) { return el.getAttribute('data-opt') !== null ? 'opt' + el.getAttribute('data-opt') : el.getAttribute('data-action') || el.id || ''; }
   function focusDefault() { if (isTv()) setFocus(0); }
@@ -1368,10 +1381,18 @@
     if (action === 'reveal-card') {
       state.cardRevealed = true;
       renderStudyCard();
-      if (state.speech && state.speech.autoRead && readScope() === 'questionOptionsAnswer' && state.round && state.round.studyCards) {
+      if (state.speech && state.speech.autoRead && state.round && state.round.studyCards) {
         var curCard = state.round.studyCards[state.cardIndex || 0];
-        var spAns = curCard ? speakable(formatCardAnswerFallback(curCard)) : '';
-        if (spAns) nativeCall('readInLanguage', ['正确答案：' + spAns, curCard.language || '']);
+        if (curCard) {
+          var cardParts = [];
+          if (readScope() === 'questionOptionsAnswer') {
+            var spAns = speakable(formatCardAnswerFallback(curCard));
+            if (spAns) cardParts.push('正确答案：' + spAns);
+          }
+          var spTip = curCard.tip ? speakable(curCard.tip) : '';
+          if (spTip) cardParts.push('解析：' + spTip);
+          if (cardParts.length) nativeCall('readInLanguage', [cardParts.join('。'), curCard.language || '']);
+        }
       }
       return;
     }
@@ -1528,26 +1549,38 @@
           if (!playListen(readItem)) toast('这道题的听力已经播放完 ' + listenCap(readItem) + ' 次');
           return;
         }
+        var listenParts = [];
         if (readScope() === 'questionOptionsAnswer') {
           var listenCorrect = (feedback.correctIndices || []).map(function (i) {
             return formatSpokenOption(readItem, i);
           }).join('，') || speakable(feedback.answerText || '');
-          if (listenCorrect) {
-            lastListenAttempt = null;
-            nativeCall('readInLanguage', ['正确答案：' + listenCorrect, readItem.language || '']);
-            return;
-          }
+          if (listenCorrect) listenParts.push('正确答案：' + listenCorrect);
+        }
+        if (feedback.tip) {
+          var listenTip = speakable(feedback.tip);
+          if (listenTip) listenParts.push('解析：' + listenTip);
+        }
+        if (listenParts.length) {
+          lastListenAttempt = null;
+          nativeCall('readInLanguage', [listenParts.join('。'), readItem.language || '']);
+          return;
         }
         if (!playListen(readItem)) toast('这道题的听力已经播放完 ' + listenCap(readItem) + ' 次');
         return;
       }
-      // 作答后这一下就是「再读一遍」：题干 + 选项（按家长设置的朗读范围）+ 正确答案
+      // 作答后这一下就是「再读一遍」：题干 + 选项（按家长设置的朗读范围）+ 正确答案 + 解析
       var spoken = readItem ? readText(readItem) : '';
-      if (feedback && readItem && readScope() === 'questionOptionsAnswer') {
-        var correct = (feedback.correctIndices || []).map(function (i) {
-          return formatSpokenOption(readItem, i);
-        }).join('，') || speakable(feedback.answerText || '');
-        if (correct) spoken = joinSpokenParts([spoken, '正确答案：' + correct], readItem);
+      if (feedback && readItem) {
+        if (readScope() === 'questionOptionsAnswer') {
+          var correct = (feedback.correctIndices || []).map(function (i) {
+            return formatSpokenOption(readItem, i);
+          }).join('，') || speakable(feedback.answerText || '');
+          if (correct) spoken = joinSpokenParts([spoken, '正确答案：' + correct], readItem);
+        }
+        if (feedback.tip) {
+          var fbManualTip = speakable(feedback.tip);
+          if (fbManualTip) spoken = joinSpokenParts([spoken, '解析：' + fbManualTip], readItem);
+        }
       }
       lastListenAttempt = null;
       nativeCall('readInLanguage', [spoken, readItem ? readItem.language || '' : '']);
@@ -1710,6 +1743,13 @@
         }
       }
       if (event.target.tagName === 'INPUT' || (event.target.tagName === 'TEXTAREA' && !event.target.readOnly)) return;
+      if (event.keyCode === 27 && state.screen === 'quiz' && isHubAvailable()) {
+        hideFeedback();
+        state.busy = false;
+        renderHub();
+        event.preventDefault();
+        return;
+      }
       var dir = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' }[event.keyCode];
       if (dir) {
         var moved = move(dir);
