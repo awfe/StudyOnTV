@@ -16,9 +16,11 @@
 [![Trendshift: #9 Kotlin Repository of the Week](https://trendshift.io/api/badge/trendshift/repositories/338664/weekly?language=Kotlin)](https://trendshift.io/repositories/338664)
 
 </div>
-[English](./README.en.md) · [Tiếng Việt](./README.vi.md)
 
 ---
+
+[English](./README.en.md) · [Tiếng Việt](./README.vi.md)
+
 
 ## 安装
 
