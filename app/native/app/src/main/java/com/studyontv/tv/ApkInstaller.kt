@@ -25,13 +25,42 @@ object ApkInstaller {
     @Volatile var lastDownloadSha256 = ""
         private set
 
+    /**
+     * 取一个 PackageInfo 里所有能读到的证书指纹。
+     *
+     * 部分电视 ROM（实测小米 MiTV / Android 9）对 `getPackageArchiveInfo` 只填 `signingInfo`、
+     * 不填 `signatures`，而某些系统版本/签名方案下 `signingCertificateHistory` 也可能为空；
+     * 只取其中一个字段会把同签名的安装包误判成「签名不一致」。这里把两侧字段全部合并。
+     */
     @Suppress("DEPRECATION")
-    private fun signatures(ctx: Context, info: android.content.pm.PackageInfo?): Set<String> {
+    private fun signatures(info: android.content.pm.PackageInfo?): Set<String> {
         if (info == null) return emptySet()
-        val sigs = if (Build.VERSION.SDK_INT >= 28) info.signingInfo?.let {
-            if (it.hasMultipleSigners()) it.apkContentsSigners else it.signingCertificateHistory
-        } else info.signatures
-        return sigs?.map { java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }?.toSet() ?: emptySet()
+        val out = LinkedHashSet<String>()
+        fun add(sigs: Array<android.content.pm.Signature>?) {
+            sigs?.forEach { sig ->
+                out += java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(sig.toByteArray()).joinToString("") { b -> "%02x".format(b) }
+            }
+        }
+        add(info.signatures)
+        if (Build.VERSION.SDK_INT >= 28) {
+            info.signingInfo?.let { signing ->
+                add(signing.apkContentsSigners)
+                if (!signing.hasMultipleSigners()) add(signing.signingCertificateHistory)
+            }
+        }
+        return out
+    }
+
+    /**
+     * 只做「能读到且确实不同」的提前拒绝。
+     *
+     * 读不到证书时不能挡住更新：真正的签名校验由系统安装器完成，
+     * 误报会让所有合法更新都装不上（见 #189）。
+     */
+    internal fun signatureVerdict(mine: Set<String>, theirs: Set<String>): String? {
+        if (mine.isEmpty() || theirs.isEmpty()) return null
+        return if (mine.intersect(theirs).isEmpty()) "安装包签名与当前版本不一致，已拒绝" else null
     }
 
     internal fun checkLocalOnlyBlocked(localOnly: Boolean = LocalOnlyGuard.enabled): String? =
@@ -52,10 +81,12 @@ object ApkInstaller {
         val current = ctx.packageManager.getPackageInfo(ctx.packageName, flags)
         if (archive.packageName != ctx.packageName) return "安装包与本应用不符"
         if (archive.versionCode <= current.versionCode) return "安装包版本不比当前新"
-        val mine = signatures(ctx, current)
-        val theirs = signatures(ctx, archive)
-        if (mine.isEmpty() || theirs.isEmpty() || mine.intersect(theirs).isEmpty()) return "安装包签名与当前版本不一致，已拒绝"
-        return null
+        val mine = signatures(current)
+        val theirs = signatures(archive)
+        if (mine.isEmpty() || theirs.isEmpty()) {
+            Diag.warn("Update", "signature info unavailable (installed=${mine.size}, archive=${theirs.size}); deferring to system installer")
+        }
+        return signatureVerdict(mine, theirs)
     }
 
     fun alreadyDownloaded(ctx: Context, sizeHint: Long): Boolean {
