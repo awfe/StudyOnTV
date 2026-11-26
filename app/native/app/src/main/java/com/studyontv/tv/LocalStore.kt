@@ -2798,11 +2798,25 @@ class LocalStore(
             }
             ensureDefaultChild()
 
+            val priorUsageDays = mutableMapOf<String, Long>()
+            if (!replace) {
+                db.rawQuery("SELECT k,v FROM kv WHERE k='usage_day' OR k LIKE 'child:%:usage_day'", null).use { rows ->
+                    while (rows.moveToNext()) {
+                        val start = rows.getString(1).toLongOrNull() ?: continue
+                        priorUsageDays[rows.getString(0)] = start
+                    }
+                }
+            }
+
+            val usageDayFields = setOf("usage_day_rounds", "usage_day_source", "usage_day_rejected_system")
             backup.optJSONObject("kv")?.let { kv ->
                 val keys = kv.keys()
                 while (keys.hasNext()) {
                     val k = keys.next()
                     if (k in SECRET_KV_KEYS || isEphemeralKvKey(k)) continue
+                    // 合并备份时，已有账本继续使用本机的来源和组数。
+                    val field = k.substringAfterLast(':')
+                    if (field in usageDayFields && (k.removeSuffix(field) + "usage_day") in priorUsageDays) continue
                     val sanitized = sanitizeKvValueForLocalOnly(k, kv.optString(k, ""))
                     db.insertWithOnConflict("kv", null, ContentValues().apply {
                         put("k", k); put("v", sanitized)
@@ -2860,6 +2874,7 @@ class LocalStore(
 
             backup.optJSONArray("events")?.let { arr ->
                 // 导出是 DESC 顺序，倒序插回保持自增 id 与时间顺序一致
+                val dayEnds = mutableMapOf<String, Long>()
                 for (i in minOf(arr.length(), 5000) - 1 downTo 0) {
                     val ev = arr.optJSONObject(i) ?: continue
                     val type = ev.optString("type").takeIf { it.isNotEmpty() } ?: continue
@@ -2875,6 +2890,13 @@ class LocalStore(
                         if (dup) continue
                     }
                     db.execSQL("INSERT INTO events(type,payload,ts,child) VALUES(?,?,?,?)", arrayOf<Any>(type, payloadStr, ts, child))
+                    if (type == "quiz_pass") {
+                        val day = priorUsageDays[scoped("usage_day", child)] ?: continue
+                        val roundsKey = scoped("usage_day_rounds", child)
+                        val rounds = rawGet(roundsKey).toIntOrNull() ?: continue
+                        val end = dayEnds.getOrPut(child) { nextDayStart(day, child) }
+                        if (ts in day until end) rawSet(roundsKey, (rounds + 1).toString())
+                    }
                 }
             }
 
@@ -2958,8 +2980,22 @@ class LocalStore(
     }
 
     fun logEvent(type: String, payload: JSONObject) {
-        writableDatabase.execSQL("INSERT INTO events(type,payload,ts,child) VALUES(?,?,?,?)",
-            arrayOf<Any>(type, payload.toString(), clockReading().millis, activeChild()))
+        // 事件按当前孩子记账：历史、使用时长、完成组数都只统计这个孩子自己的
+        val child = activeChild()
+        val db = writableDatabase
+        val isRound = type == "quiz_pass"
+        val ownTransaction = isRound && !db.inTransaction()
+        if (ownTransaction) db.beginTransaction()
+        try {
+            // 组数随额度结算。时钟有偏差时，事件时间仍用于历史展示。
+            val rounds = if (isRound && rawGet(scoped("usage_day", child)).isNotEmpty()) roundsDoneToday(child) + 1 else null
+            db.execSQL("INSERT INTO events(type,payload,ts,child) VALUES(?,?,?,?)",
+                arrayOf<Any>(type, payload.toString(), clockReading().millis, child))
+            if (rounds != null) rawSet(scoped("usage_day_rounds", child), rounds.toString())
+            if (ownTransaction) db.setTransactionSuccessful()
+        } finally {
+            if (ownTransaction) db.endTransaction()
+        }
     }
 
     fun recentEvents(limit: Int = 50): JSONArray {
@@ -2971,13 +3007,15 @@ class LocalStore(
         return out
     }
 
-    fun stats(start: Long, end: Long): JSONObject {
+    fun stats(start: Long, end: Long): JSONObject = stats(start, end, activeChild())
+
+    private fun stats(start: Long, end: Long, child: String): JSONObject {
         var usedMs = 0L
         var answered = 0
         var correct = 0
         var rounds = 0
         readableDatabase.rawQuery("SELECT type,payload FROM events WHERE ts>=? AND ts<? AND child=?",
-            arrayOf(start.toString(), end.toString(), activeChild())).use { c ->
+            arrayOf(start.toString(), end.toString(), child)).use { c ->
             while (c.moveToNext()) {
                 val p = try { JSONObject(c.getString(1)) } catch (_: Exception) { JSONObject() }
                 when (c.getString(0)) {
@@ -2993,23 +3031,37 @@ class LocalStore(
             .put("accuracy", if (answered > 0) correct * 100 / answered else 0)
     }
 
-    fun todayStats(): JSONObject = stats(startOfToday(), Long.MAX_VALUE)
-    // status() 每秒都会调用，这里直接计数，不再解析今天的全部事件
-    fun roundsDoneToday(dayStart: Long = startOfToday()): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM events WHERE type='quiz_pass' AND ts>=? AND child=?",
-        arrayOf(dayStart.toString(), activeChild())).use {
-        if (it.moveToFirst()) it.getInt(0) else 0
+    fun todayStats(): JSONObject {
+        val child = activeChild()
+        val start = startOfToday(child)
+        return stats(start, nextDayStart(start, child), child).put("rounds", roundsDoneToday(child))
     }
+
+    fun roundsDoneToday(): Int = roundsDoneToday(activeChild())
+
+    private fun roundsDoneToday(child: String): Int {
+        val usageDay = rawGet(scoped("usage_day", child)).toLongOrNull()
+            ?: return roundsInDay(startOfToday(child), child)
+        // 旧版尚未存储组数时，从当天的事件恢复。
+        return rawGet(scoped("usage_day_rounds", child)).toIntOrNull() ?: roundsInDay(usageDay, child)
+    }
+
+    internal fun roundsInDay(dayStart: Long, child: String = activeChild()): Int = readableDatabase.rawQuery(
+        "SELECT COUNT(*) FROM events WHERE type='quiz_pass' AND ts>=? AND ts<? AND child=?",
+        arrayOf(dayStart.toString(), nextDayStart(dayStart, child).toString(), child)
+    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
 
     fun historyDays(days: Int = 7): JSONArray {
         val out = JSONArray()
-        val today = todayStart()
+        val child = activeChild()
+        val today = calendarFor(child).atStartOfDay()
         for (d in 0 until days.coerceIn(1, 90)) {
             val cal = today.clone() as Calendar
             cal.add(Calendar.DAY_OF_YEAR, -d)
-            val start = cal.timeInMillis
+            val start = cal.atStartOfDay().timeInMillis
             val label = if (d == 0) "今天" else if (d == 1) "昨天" else "${cal.get(Calendar.MONTH) + 1}/${cal.get(Calendar.DAY_OF_MONTH)}"
             cal.add(Calendar.DAY_OF_YEAR, 1)
-            out.put(stats(start, cal.timeInMillis).put("label", label))
+            out.put(stats(start, cal.atStartOfDay().timeInMillis, child).put("label", label))
         }
         return out
     }
@@ -3021,10 +3073,18 @@ class LocalStore(
         timeInMillis = clockReading().millis
     }
 
-    private fun todayStart(child: String = activeChild()): Calendar = calendarFor(child).apply {
+    private fun Calendar.atStartOfDay(): Calendar = apply {
         set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
     }
 
+    private fun nextDayStart(start: Long, child: String): Long = Calendar.getInstance(timeZoneFor(child)).apply {
+        timeInMillis = start
+        add(Calendar.DAY_OF_YEAR, 1)
+    }.atStartOfDay().timeInMillis
+
     @JvmOverloads
-    fun startOfToday(child: String = activeChild()): Long = startOfDayMillis(clockReading().millis, timeZoneFor(child))
+    fun startOfToday(child: String = activeChild()): Long = startOfTodayAt(clockReading().millis, child)
+
+    internal fun startOfTodayAt(millis: Long, child: String = activeChild()): Long =
+        startOfDayMillis(millis, timeZoneFor(child))
 }

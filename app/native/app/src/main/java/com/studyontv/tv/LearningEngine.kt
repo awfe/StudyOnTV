@@ -46,7 +46,7 @@ object TimePointsMath {
 
 class LearningEngine(
     private val store: LocalStore,
-    private val usageDayStart: () -> Long = store::startOfToday
+    private val usageDayStart: (Long) -> Long = { store.startOfTodayAt(it) }
 ) {
     companion object {
         private val SECRET_QUESTION_FIELDS = listOf("k", "answers", "correctIndices", "tip", "modelAnswer", "rubric")
@@ -429,18 +429,40 @@ class LearningEngine(
         val db = store.writableDatabase
         // 结算在开启事务前确定用量日期，事务中的 status() 不能重新日切。
         if (db.inTransaction()) return
-        val current = usageDayStart()
+        val clock = store.clockReading()
+        val current = usageDayStart(clock.millis)
         val previousUsageDay = store.get("usage_day").toLongOrNull()
-        // 部分设备冷启动会先使用出厂日期，校时后才恢复。回拨时保留原来的用量日期和余额。
-        if (previousUsageDay != null && current < previousUsageDay && lastLoggedRollbackDay != previousUsageDay) {
-            lastLoggedRollbackDay = previousUsageDay
-            Diag.warn("Day", "检测到日期回拨，保留记账日和额度 previous=$previousUsageDay current=$current")
-        }
-        if (previousUsageDay == null || current > previousUsageDay) {
+        val previousSource = store.get("usage_day_source")
+        val rejectedSystemDay = store.get("usage_day_rejected_system").toLongOrNull()
+        val networkTime = clock.source == DeviceClock.Source.NETWORK
+        // 时钟再次回退到系统时间时，已被纠正的未来日期不能再次触发日切。
+        val rejectedFallback = !networkTime && rejectedSystemDay != null && current >= rejectedSystemDay
+
+        // 无来源的旧版记账日也可能来自错误的系统时间。校正日期时沿用本次账本，不重新发放额度。
+        if (networkTime && previousUsageDay != null && current < previousUsageDay &&
+            previousSource != DeviceClock.Source.NETWORK.id) {
+            db.beginTransaction()
+            try {
+                put("usage_day_rounds", store.roundsDoneToday().toLong())
+                put("usage_day", current)
+                store.set("usage_day_source", clock.source.id)
+                put("usage_day_rejected_system", minOf(previousUsageDay, rejectedSystemDay ?: previousUsageDay))
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            Diag.warn("Day", "网络时间校正未来记账日，保留额度 previous=$previousUsageDay current=$current")
+        } else if (previousUsageDay == null || (current > previousUsageDay && !rejectedFallback)) {
             db.beginTransaction()
             try {
                 if (pendingUsageMs > 0) store.logEvent("usage", JSONObject().put("milliseconds", pendingUsageMs))
+                val rounds = if (previousUsageDay == null) store.roundsInDay(current) else 0
                 put("usage_day", current)
+                put("usage_day_rounds", rounds.toLong())
+                store.set("usage_day_source", clock.source.id)
+                if (networkTime && rejectedSystemDay != null && current >= rejectedSystemDay) {
+                    store.set("usage_day_rejected_system", "")
+                }
                 put("credit_ms", 0)
                 put("used_ms", 0)
                 put("cap_adjust_ms", 0)
@@ -454,7 +476,18 @@ class LearningEngine(
                 db.endTransaction()
             }
             pendingUsageMs = 0
-        } else if (store.get("free_used_ms").isEmpty()) {
+            return
+        } else {
+            // 部分设备冷启动会先使用出厂日期，校时后才恢复。回拨时保留原来的用量日期和余额。
+            if (current < previousUsageDay && lastLoggedRollbackDay != previousUsageDay) {
+                lastLoggedRollbackDay = previousUsageDay
+                Diag.warn("Day", "检测到日期回拨，保留记账日和额度 previous=$previousUsageDay current=$current")
+            }
+            if (networkTime && current == previousUsageDay && previousSource != clock.source.id) {
+                store.set("usage_day_source", clock.source.id)
+            }
+        }
+        if (store.get("free_used_ms").isEmpty()) {
             // 旧版本升级：没有 free_used_ms，用当天已用时长估算已消耗的免费额度。
             // 免费额度总是先于奖励余额扣除，所以这个估算不会把奖励时间算成免费时间。
             val daily = store.config().optLong("dailyFreeMinutes", 0L) * 60000L
@@ -719,8 +752,7 @@ class LearningEngine(
         val supervision = c.optBoolean("supervisionEnabled", true)
         val remaining = usableCredit(c)
         val used = number("used_ms")
-        val settledUsageDay = if (inTransaction) store.get("usage_day").toLongOrNull() else null
-        val rounds = if (settledUsageDay == null) store.roundsDoneToday() else store.roundsDoneToday(settledUsageDay)
+        val rounds = store.roundsDoneToday()
         val o = if (supervision) override() else null
         val point = if (supervision) activeWindow(c) else null
         val limit = if (point?.mode == "counted") JSONObject(c.toString()).put("dailyMinutes", point.dailyMinutes) else c
