@@ -214,6 +214,9 @@
     state.screen = screen;
     document.body.className = 'on-' + screen;
   }
+  function unlockExpiry(override) {
+    return override.untilShutdown ? '到本次关机' : left2(override.remainingSeconds);
+  }
   function pill() {
     var c = state.config || {}, st = state.learning || {}, study = state.study || {};
     var who = (state.children && state.children.length > 1) ? (childName() + ' · ') : '';
@@ -223,7 +226,7 @@
       return;
     }
     var left = Math.max(0, (c.roundsPerDay || 3) - (st.roundsDoneToday || 0));
-    if (st.override && st.override.mode === 'unlock') { $('topPill').textContent = who + '家长已解锁 · ' + left2(st.override.remainingSeconds); return; }
+    if (st.override && st.override.mode === 'unlock') { $('topPill').textContent = who + '家长已解锁 · ' + unlockExpiry(st.override); return; }
     if (st.override && st.override.mode === 'indefinite') { $('topPill').textContent = who + '管控已关闭'; return; }
     var point = st.activePoint;
     var pointName = point && point.name ? point.name : '';
@@ -370,7 +373,7 @@
       $('hubSubtitle').textContent = isPureStudyMode()
         ? '先背再测、间隔重复与错题清零，每天进步一点点'
         : (ov2 && ov2.mode === 'unlock'
-          ? left2(ov2.remainingSeconds) + '，随时挑个模式巩固知识'
+          ? unlockExpiry(ov2) + '，随时挑个模式巩固知识'
           : (scheduleText() ? scheduleText() + ' 为学习时段，现在可自由练习或返回桌面' : '随时开始背诵与刷题，也可以返回桌面'));
     }
   }

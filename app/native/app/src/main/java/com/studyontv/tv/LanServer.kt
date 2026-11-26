@@ -846,6 +846,14 @@ class LanServer(
             if (!parent && !control) return@post json(ctx, 403, err("forbidden").put("message", "请先用管理密码登录"))
             val input = JSONObject(ctx.body.ifEmpty { "{}" })
             val action = input.optString("action")
+            require(!input.has("untilShutdown") || input.get("untilShutdown") is Boolean) { "untilShutdown 需要为布尔值" }
+            val untilShutdown = input.optBoolean("untilShutdown")
+            require(!untilShutdown || action == "unlock") { "只有临时解锁支持到本次关机" }
+            if (untilShutdown && input.has("minutes")) {
+                require(input.get("minutes") is Number && input.getDouble("minutes") == 0.0) {
+                    "到本次关机的分钟数必须为 0 或省略"
+                }
+            }
             if (action == "clear_extra") {
                 val res = DeviceRuntime.learning.clearExtraPool()
                 store.logEvent("remote", JSONObject().put("action", action).put("cleared", res.optLong("cleared", 0L)).put("source", if (parent) "panel" else "integration"))
@@ -856,7 +864,8 @@ class LanServer(
                 val value = input.getDouble("minutes")
                 require(value.isFinite() && value == value.toInt().toDouble()) { "调整时长需要整数分钟" }
             }
-            val status = DeviceRuntime.learning.remote(action, input.optInt("minutes"), if (parent) "panel" else "integration")
+            val status = DeviceRuntime.learning.remote(action, input.optInt("minutes"),
+                if (parent) "panel" else "integration", untilShutdown)
             GateService.refreshNow()
             json(ctx, 200, JSONObject().put("learning", status))
         }

@@ -75,9 +75,15 @@ object SpacedRepetition {
 class LocalStore(
     context: Context,
     databaseName: String = "studyontv.db",
+    private val readBootCount: () -> Int = {
+        try {
+            android.provider.Settings.Global.getInt(context.contentResolver, "boot_count", -1)
+        } catch (_: Exception) { -1 }
+    },
     private val readClock: () -> DeviceClock.Reading = DeviceClock::read
 ) : SQLiteOpenHelper(context, databaseName, null, 11) {
     internal fun clockReading(): DeviceClock.Reading = readClock()
+    internal fun bootCount(): Int = readBootCount()
 
     companion object {
         val DEFAULT_PRAISE = listOf("太棒了！", "答对啦！", "完全正确！", "真厉害！", "好样的，继续保持！", "漂亮！你越来越熟练了")

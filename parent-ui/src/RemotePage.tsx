@@ -239,8 +239,8 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
   });
 
   const run = useMutation({
-    mutationFn: (body: { action: string; minutes?: number; label: string }) =>
-      api('/api/remote', 'POST', { action: body.action, minutes: body.minutes || 0 }),
+    mutationFn: (body: { action: string; minutes?: number; label: string; untilShutdown?: boolean }) =>
+      api('/api/remote', 'POST', { action: body.action, minutes: body.minutes || 0, untilShutdown: body.untilShutdown || false }),
     onSuccess: (result, body) => {
       client.setQueryData(['state', sessionId], (old: any) =>
         old ? { ...old, learning: result.learning } : old,
@@ -253,6 +253,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
   const go = (action: string, minutes: number, label: string) =>
     run.mutate({ action, minutes, label });
   const mode = override?.mode as 'unlock' | 'lock' | 'indefinite' | undefined;
+  const untilShutdown = mode === 'unlock' && override?.untilShutdown === true;
   const title = !supervisionEnabled
     ? '纯粹学习模式 · 不锁屏'
     : mode === 'indefinite'
@@ -273,11 +274,17 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
   const [custom, setCustom] = useState<{
     mode: 'unlock' | 'lock' | 'indefinite' | 'credit';
     minutes: string;
+    untilShutdown?: boolean;
   } | null>(null);
 
   function submitCustom() {
     const minutes = Number(custom?.minutes);
     if (!custom) return;
+    if (custom.mode === 'unlock' && custom.untilShutdown) {
+      run.mutate({ action: 'unlock', minutes: 0, untilShutdown: true, label: '已临时解锁到本次关机' });
+      setCustom(null);
+      return;
+    }
     if (custom.mode === 'credit') {
       if (!Number.isInteger(minutes) || minutes < 1 || minutes > 480) {
         return toast.error('请输入 1–480 分钟');
@@ -564,20 +571,22 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
                     : mode === 'lock'
                       ? '暂停剩余'
                       : mode === 'unlock'
-                        ? '临时解锁剩余'
+                        ? untilShutdown ? '临时解锁期限' : '临时解锁剩余'
                         : '剩余可用时间'}
                 </p>
                 <div className="mt-2 flex items-end gap-2">
                   <strong className="text-3xl font-semibold tracking-tight tabular-nums">
                     {unlimited
                       ? '不限时'
+                      : untilShutdown
+                        ? '到本次关机'
                       : learning.free && !mode
                         ? '自由'
                         : blocked && !mode
                           ? '暂停'
                           : Math.ceil(remaining / 60)}
                   </strong>
-                  {!unlimited && !(!mode && (learning.free || blocked)) && (
+                  {!unlimited && !untilShutdown && !(!mode && (learning.free || blocked)) && (
                     <span className="pb-1 text-sm text-muted-foreground">分钟</span>
                   )}
                 </div>
@@ -1010,7 +1019,9 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
                 ? `当前余额 ${Math.ceil(((learning.remainingSeconds || 0) + (learning.freeQuotaSeconds || 0)) / 60)} 分钟；只调整今天，不改每日规则。`
                 : custom?.mode === 'lock'
                   ? '锁定期间孩子不能答题，到时间自动恢复；家长可随时解除。'
-                  : '期间不需要答题，也不计入使用时间；到时间自动恢复规则。'}
+                  : custom?.untilShutdown
+                    ? '设备真正关机、重启或断电后恢复规则；待机、熄屏和应用重启仍保持解锁，家长可随时取消。'
+                    : '可选择解锁时长或到本次关机；期间不需要答题，也不计入使用时间。'}
             </DialogDescription>
           </DialogHeader>
           {custom?.mode === 'credit' && (
@@ -1049,14 +1060,24 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
               <Button
                 key={String(label)}
                 type="button"
-                variant={custom?.minutes === String(minutes) ? 'secondary' : 'outline'}
+                variant={!custom?.untilShutdown && custom?.minutes === String(minutes) ? 'secondary' : 'outline'}
                 onClick={() =>
-                  setCustom(current => (current ? { ...current, minutes: String(minutes) } : current))
+                  setCustom(current => (current ? { ...current, minutes: String(minutes), untilShutdown: false } : current))
                 }
               >
                 {label}
               </Button>
             ))}
+            {custom?.mode === 'unlock' && (
+              <Button
+                type="button"
+                className="col-span-2"
+                variant={custom.untilShutdown ? 'secondary' : 'outline'}
+                onClick={() => setCustom(current => current ? { ...current, untilShutdown: true } : current)}
+              >
+                到本次关机
+              </Button>
+            )}
           </ToolbarGroup>
           <div className="space-y-2">
             <Label htmlFor="custom-minutes">分钟</Label>
@@ -1066,7 +1087,8 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
               inputMode="numeric"
               min={1}
               max={custom?.mode === 'credit' ? 480 : custom?.mode === 'lock' ? 10080 : 1440}
-              value={custom?.minutes || ''}
+              disabled={custom?.untilShutdown}
+              value={custom?.untilShutdown ? '' : custom?.minutes || ''}
               onChange={event =>
                 setCustom(current =>
                   current ? { ...current, minutes: event.target.value } : current,
