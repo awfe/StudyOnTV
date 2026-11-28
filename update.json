@@ -1,21 +1,21 @@
 {
-  "version": "0.5.11",
-  "versionCode": 58,
+  "version": "0.5.12",
+  "versionCode": 59,
   "force": false,
-  "notes": "- **锁屏静音期间朗读与听力正常出声（#196）**：后台视频无视暂停键被强静媒体流时，答题自动朗读、云端语音与听力音频会动态改走独立音频流，不再被连带静音；平时仍走媒体流，保持华为智慧屏 / TCL 等电视 HDMI 正常出声。\n- **电视解锁后音频恢复更稳（#197）**：解除静音后按当前实时音量档位幂等刷新一次音频通路，解决 Sony BRAVIA Android 12 等机型解锁后仍无声的问题；在限制应用改音量的定制固件上遇到 `SecurityException` 时自动熔断静音降级，不再循环报错。\n- **小米 / 澎湃平板在线更新通知兜底（#202）**：Web 端点击「立即安装」下载完成后，同步发出高优先级「新版本已下载就绪」点击安装通知，绕过 MIUI/HyperOS 后台拉起拦截（成功弹出安装页时自动消除通知），并在家长面板补充权限提示。\n- **已暂停题目一键查看与恢复（#205）**：题库列表工具栏「查看已暂停（N）」支持一键切换展示，桌面行、手机卡片与题目详情抽屉均可单题一键恢复；全部题目被暂停时也会明确提示并给出恢复入口。\n- **整机备份恢复媒体自愈**：恢复或局域网同步时自动兼容旧备份较大内联配图，对损坏或失效的配图/音频地址仅清理该字段而不再导致整份备份恢复失败。",
-  "publishedAt": "2026-11-28T05:01:14.532Z",
+  "notes": "- **屏幕倒计时位置可配置**：在「学习计划 → 更多答题与显示设置」中可选右上角、左上角、右下角、左下角，避开电视默认时间或字幕位置；修改后悬浮角标 1 秒内实时移位生效。\n- **记住登录状态更顺手**：家长面板登录页提供「记住登录状态（30 天免密码）」选项，多设备独立保存会话令牌，切换设备不再反复输密码；独立家长端 App 按设备 ID 记住会话，电视换 IP 后依然免密直进后台，首页卡片标注「已登录」状态。\n- **独立家长端 App 精简改版**：首屏直接展示家里的设备列表，大幅精简首页、无线 ADB 向导与权限步骤中的冗余提示和工程术语。\n- **在线升级提示更清晰**：区分开发调试版与正式版/跨形态包名差异，给出更明确的升级指引。",
+  "publishedAt": "2026-11-28T05:46:49.251Z",
   "assets": {
     "tv": {
-      "name": "StudyOnTV-Android-TV-v0.5.11.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.11/StudyOnTV-Android-TV-v0.5.11.apk",
-      "sha256": "75412f4258941247f5f75ae4cd0e59e847834f6ab83370f3ee3280616212a23a",
-      "size": 3621535
+      "name": "StudyOnTV-Android-TV-v0.5.12.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.12/StudyOnTV-Android-TV-v0.5.12.apk",
+      "sha256": "61955e4d1ce3ae640202b9132400973686afcd90b5f1459b4e187f054a96b25d",
+      "size": 3623493
     },
     "mobile": {
-      "name": "StudyOnTV-Mobile-v0.5.11.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.11/StudyOnTV-Mobile-v0.5.11.apk",
-      "sha256": "7fdf90e5389b98d1b88cb541954b426e74cbe8802daaea3caffd54a447a454d7",
-      "size": 3623560
+      "name": "StudyOnTV-Mobile-v0.5.12.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.12/StudyOnTV-Mobile-v0.5.12.apk",
+      "sha256": "652643bd3df19056d739a915101f00cf81060bd2571ccaa8acab1a9aa8199902",
+      "size": 3625478
     }
   }
 }
