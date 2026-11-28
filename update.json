@@ -1,21 +1,21 @@
 {
-  "version": "0.5.12",
-  "versionCode": 59,
+  "version": "0.5.13",
+  "versionCode": 60,
   "force": false,
-  "notes": "- **屏幕倒计时位置可配置**：在「学习计划 → 更多答题与显示设置」中可选右上角、左上角、右下角、左下角，避开电视默认时间或字幕位置；修改后悬浮角标 1 秒内实时移位生效。\n- **记住登录状态更顺手**：家长面板登录页提供「记住登录状态（30 天免密码）」选项，多设备独立保存会话令牌，切换设备不再反复输密码；独立家长端 App 按设备 ID 记住会话，电视换 IP 后依然免密直进后台，首页卡片标注「已登录」状态。\n- **独立家长端 App 精简改版**：首屏直接展示家里的设备列表，大幅精简首页、无线 ADB 向导与权限步骤中的冗余提示和工程术语。\n- **在线升级提示更清晰**：区分开发调试版与正式版/跨形态包名差异，给出更明确的升级指引。",
-  "publishedAt": "2026-11-28T05:46:49.251Z",
+  "notes": "v0.5.13\n\n- 后台自动下载并在就绪后再弹更新提示：默认开启后台静默下载与校验（EU 仅本地隐私版保持零外联），下载完成后才在设备端与家长后台提示「已下载好，立即安装」，点击即可直接进入安装确认无需等待；升级后自动清理旧缓存安装包。\n- 家长面板全面人话化：将 3 个重叠的出题顺序开关收拢为单一清晰的「出题顺序」四选一（附一句话预览，100% 兼容旧配置）；消除「Anki / 间隔重复 / 主从组合 / 朗读通路 / 保留后台空窗口」等抽象术语；移除重复的「先背再测」开关，全天管控开启时自动隐藏无效时段策略。\n- 登录页默认勾选「参与软件体验提升计划」，与设备端默认设置对齐（可随时在登录页或设置中关闭，EU 仅本地隐私版不受影响）。",
+  "publishedAt": "2026-11-28T07:21:27.936Z",
   "assets": {
     "tv": {
-      "name": "StudyOnTV-Android-TV-v0.5.12.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.12/StudyOnTV-Android-TV-v0.5.12.apk",
-      "sha256": "61955e4d1ce3ae640202b9132400973686afcd90b5f1459b4e187f054a96b25d",
-      "size": 3623493
+      "name": "StudyOnTV-Android-TV-v0.5.13.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.13/StudyOnTV-Android-TV-v0.5.13.apk",
+      "sha256": "b6bfd2a4d75e5c4949bdecc40b2619e81d9f2790978dce08a06126f109134213",
+      "size": 3625845
     },
     "mobile": {
-      "name": "StudyOnTV-Mobile-v0.5.12.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.12/StudyOnTV-Mobile-v0.5.12.apk",
-      "sha256": "652643bd3df19056d739a915101f00cf81060bd2571ccaa8acab1a9aa8199902",
-      "size": 3625478
+      "name": "StudyOnTV-Mobile-v0.5.13.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.13/StudyOnTV-Mobile-v0.5.13.apk",
+      "sha256": "b78a660537f5acda167482aa68097e0cd308271c4e5e144cc0ff48c53bc8ce90",
+      "size": 3627355
     }
   }
 }
