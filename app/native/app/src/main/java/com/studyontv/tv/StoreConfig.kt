@@ -16,7 +16,8 @@ internal fun LocalStore.configImpl(child: String): JSONObject {
         .put("coverageFirst", true)
         // 新题优先：一次都没出过的题排在前面（#230，默认关）
         .put("newFirst", false)
-        .put("playMode", "round").put("extraEnabled", true).put("shuffleOptions", false).put("showCountdown", true)
+        .put("playMode", "round").put("extraEnabled", true).put("shuffleOptions", false)
+        .put("showCountdown", true).put("countdownPosition", "top-right")
         .put("wrongThreshold", 3).put("extraQuestions", 2)
         .put("difficultyRewardEnabled", false)
         .put("difficultyRewards", JSONObject().put("1", 1).put("2", 2).put("3", 3).put("4", 4).put("5", 5))
@@ -60,6 +61,7 @@ internal fun LocalStore.configImpl(child: String): JSONObject {
     if (defaults.optString("spacedScope") !in listOf("all", "wrong_only")) {
         defaults.put("spacedScope", "all")
     }
+    defaults.put("countdownPosition", CountdownOverlay.normalizePosition(defaults.optString("countdownPosition")))
     defaults.put("gradeSubjects", LocalStore.normalizeGradeSubjects(defaults.optJSONObject("gradeSubjects")))
     val snapshot = defaults.toString()
     configCache[child] = snapshot
@@ -201,6 +203,11 @@ internal fun LocalStore.saveConfigImpl(input: JSONObject): JSONObject {
         val scope = input.optString("spacedScope")
         require(scope in listOf("all", "wrong_only")) { "未知复习范围" }
         next.put("spacedScope", scope)
+    }
+    if (input.has("countdownPosition")) {
+        val pos = input.optString("countdownPosition").trim()
+        require(pos in CountdownOverlay.VALID_POSITIONS) { "未知的倒计时显示位置" }
+        next.put("countdownPosition", pos)
     }
     listOf(
         "supervisionEnabled", "memorizeFirst", "extraEnabled", "coverageFirst", "newFirst",

@@ -169,4 +169,14 @@ class TvProvisionerAndLanTest {
         val api33 = TvProvisioner.buildPermissionPlan(TvProvisioner.PKG_TV, 33, "a/b")
         assertTrue(api33.any { it.id == "perm_notify" && it.command.contains("POST_NOTIFICATIONS") })
     }
+
+    @Test
+    fun deviceStoreValidatesSessionTokenFormat() {
+        assertTrue(DeviceStore.isValidSessionToken("a".repeat(64)))
+        assertTrue(DeviceStore.isValidSessionToken("0123456789abcdef".repeat(4)))
+        assertFalse(DeviceStore.isValidSessionToken(""))
+        assertFalse(DeviceStore.isValidSessionToken("a".repeat(63)))
+        assertFalse(DeviceStore.isValidSessionToken("g".repeat(64)))
+        assertFalse(DeviceStore.isValidSessionToken("A".repeat(64)))
+    }
 }

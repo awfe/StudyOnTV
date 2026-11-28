@@ -98,42 +98,27 @@ class ParentHomeActivity : Activity() {
         root.addView(header)
         updateNetworkSubtitle()
 
-        root.addView(ParentUi.spacer(this, 16))
-
-        // 无线 ADB 一键装机卡片（单色克制容器，仅主按钮使用强调蓝）
-        val adbCard = ParentUi.card(this, p, paddingDp = 16)
-        adbCard.addView(TextView(this).apply {
-            text = "无线 ADB 一键装电视 / 修权限"
-            textSize = 15.5f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(p.textPrimary)
-        })
-        adbCard.addView(TextView(this).apply {
-            text = "免 U 盘、免电脑：推送安装包并自动配置悬浮窗、使用情况、无障碍与省电白名单。"
-            textSize = 13f
-            setTextColor(p.textMuted)
-            setPadding(0, ParentUi.dp(this@ParentHomeActivity, 6), 0, ParentUi.dp(this@ParentHomeActivity, 12))
-        })
-        adbCard.addView(ParentUi.primaryButton(this, p, "打开无线 ADB 向导 →") {
-            openAdbWizard(prefillIp = null, fixOnly = false)
-        })
-        root.addView(adbCard)
-
         root.addView(ParentUi.spacer(this, 14))
 
-        // 快捷操作栏：扫描局域网 + 手动添加 IP
+        // 顶部快捷操作栏：扫描 / 添加 IP / 无线安装，设备列表紧跟在下方首屏可见
         val actionsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-        scanBtn = ParentUi.secondaryButton(this, p, "扫描局域网设备") {
+        scanBtn = ParentUi.secondaryButton(this, p, "扫描设备") {
             triggerLanScan(silent = false)
         }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         actionsRow.addView(scanBtn)
-        actionsRow.addView(ParentUi.spacer(this, heightDp = 1, widthDp = 10))
-        actionsRow.addView(ParentUi.secondaryButton(this, p, "+ 手动添加 IP") {
+        actionsRow.addView(ParentUi.spacer(this, heightDp = 1, widthDp = 8))
+        actionsRow.addView(ParentUi.secondaryButton(this, p, "添加 IP") {
             showManualAddDialog()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        actionsRow.addView(ParentUi.spacer(this, heightDp = 1, widthDp = 8))
+        actionsRow.addView(ParentUi.tintedButton(this, p.accentSoft, p.accentText, "无线安装") {
+            openAdbWizard(prefillIp = null, fixOnly = false)
         }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
@@ -143,10 +128,10 @@ class ParentHomeActivity : Activity() {
         val listHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(ParentUi.dp(this@ParentHomeActivity, 2), ParentUi.dp(this@ParentHomeActivity, 18), 0, ParentUi.dp(this@ParentHomeActivity, 8))
+            setPadding(ParentUi.dp(this@ParentHomeActivity, 2), ParentUi.dp(this@ParentHomeActivity, 16), 0, ParentUi.dp(this@ParentHomeActivity, 8))
         }
         listHeader.addView(TextView(this).apply {
-            text = "家里的学习设备"
+            text = "设备"
             textSize = 14f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(p.textPrimary)
@@ -164,25 +149,12 @@ class ParentHomeActivity : Activity() {
         }
         root.addView(deviceListContainer)
 
-        // 底部轻提示
-        root.addView(ParentUi.spacer(this, 14))
-        root.addView(TextView(this).apply {
-            text = "家长端仅申请基础局域网访问权限，零后台常驻、不读相册定位；所有数据均直接与家里电视本地通信。"
-            textSize = 11.5f
-            setTextColor(p.textMuted)
-            setPadding(ParentUi.dp(this@ParentHomeActivity, 4), 0, ParentUi.dp(this@ParentHomeActivity, 4), 0)
-        })
-
         return scroll
     }
 
     private fun updateNetworkSubtitle() {
         val ips = LanNet.localPrivateIpv4Addresses()
-        subtitleView.text = if (ips.isNotEmpty()) {
-            "本机局域网 IP：${ips.first()} · 纯局域网直连"
-        } else {
-            "未检测到 Wi-Fi 局域网，请先连上与电视相同的 Wi-Fi"
-        }
+        subtitleView.text = if (ips.isNotEmpty()) "局域网 ${ips.first()}" else "未连接 Wi-Fi"
     }
 
     private fun triggerLanScan(silent: Boolean) {
@@ -190,7 +162,7 @@ class ParentHomeActivity : Activity() {
         runOnUiThread {
             scanBtn.text = "扫描中…"
             scanBtn.isEnabled = false
-            scanStatusView.text = "正在扫描家庭 Wi-Fi…"
+            scanStatusView.text = "扫描中…"
         }
         io.execute {
             try {
@@ -217,22 +189,22 @@ class ParentHomeActivity : Activity() {
                 runOnUiThread {
                     devices = merged
                     onlineIds = liveIds
-                    scanBtn.text = "扫描局域网设备"
+                    scanBtn.text = "扫描设备"
                     scanBtn.isEnabled = true
                     scanStatusView.text = when {
                         liveIds.isNotEmpty() -> "在线 ${liveIds.size} 台"
-                        merged.isNotEmpty() -> "未发现新在线设备"
-                        else -> "暂未发现设备"
+                        merged.isNotEmpty() -> "共 ${merged.size} 台"
+                        else -> ""
                     }
                     updateNetworkSubtitle()
                     renderDevices()
                     if (!silent && liveIds.isEmpty() && merged.isEmpty()) {
-                        Toast.makeText(this, "未发现运行中的电视，可尝试「手动添加 IP」或「无线 ADB 一键装电视」", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "未发现设备，可点「添加 IP」或「无线安装」", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (_: Exception) {
                 runOnUiThread {
-                    scanBtn.text = "扫描局域网设备"
+                    scanBtn.text = "扫描设备"
                     scanBtn.isEnabled = true
                     scanStatusView.text = "扫描中断"
                 }
@@ -245,20 +217,21 @@ class ParentHomeActivity : Activity() {
     private fun renderDevices() {
         deviceListContainer.removeAllViews()
         if (devices.isEmpty()) {
-            val emptyCard = ParentUi.card(this, p, paddingDp = 18)
+            val emptyCard = ParentUi.card(this, p, paddingDp = 16)
             emptyCard.addView(TextView(this).apply {
-                text = "还没有发现已安装的设备"
+                text = "暂无设备"
                 textSize = 15f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(p.textPrimary)
             })
             emptyCard.addView(TextView(this).apply {
-                text = "• 如果电视已安装「题了个题」，请先在电视上打开它，并确认手机与电视连在同一个 Wi-Fi，再点「扫描局域网设备」。\n" +
-                    "• 如果电视还没安装，可直接点击上方的「无线 ADB 一键装电视 / 修权限」，手机自动把安装包推到电视并配好全部权限。"
+                text = "同 Wi-Fi 打开设备端「题了个题」后点上方「扫描设备」，或直接无线安装。"
                 textSize = 13f
-                setTextColor(p.textSecondary)
-                setLineSpacing(0f, 1.25f)
-                setPadding(0, ParentUi.dp(this@ParentHomeActivity, 8), 0, 0)
+                setTextColor(p.textMuted)
+                setPadding(0, ParentUi.dp(this@ParentHomeActivity, 6), 0, ParentUi.dp(this@ParentHomeActivity, 12))
+            })
+            emptyCard.addView(ParentUi.primaryButton(this, p, "无线 ADB 安装 / 修权限") {
+                openAdbWizard(prefillIp = null, fixOnly = false)
             })
             deviceListContainer.addView(emptyCard)
             return
@@ -272,6 +245,7 @@ class ParentHomeActivity : Activity() {
 
     private fun buildDeviceCard(dev: DeviceStore.SavedDevice): View {
         val isOnline = dev.id in onlineIds
+        val hasSession = DeviceStore.hasSessionToken(this, dev.id)
         val card = ParentUi.card(this, p, paddingDp = 15)
 
         // 第一行：名称 + 状态徽章 + 菜单
@@ -299,17 +273,21 @@ class ParentHomeActivity : Activity() {
         nameLine.addView(
             ParentUi.badge(
                 this,
-                if (isOnline) "在线" else "上次记录",
+                if (isOnline) "在线" else "离线",
                 if (isOnline) p.greenSoft else p.surfaceAlt,
                 if (isOnline) p.green else p.textMuted
             )
         )
+        if (hasSession) {
+            nameLine.addView(ParentUi.spacer(this, 1, 6))
+            nameLine.addView(ParentUi.badge(this, "已登录", p.accentSoft, p.accentText))
+        }
         titleWrap.addView(nameLine)
 
         val metaParts = ArrayList<String>()
         metaParts.add(dev.host)
         if (dev.version.isNotBlank()) metaParts.add("v${dev.version}")
-        if (dev.questions > 0) metaParts.add("题库 ${dev.questions} 题")
+        if (dev.questions > 0) metaParts.add("${dev.questions} 题")
         titleWrap.addView(TextView(this).apply {
             text = metaParts.joinToString(" · ")
             textSize = 12.5f
@@ -335,11 +313,10 @@ class ParentHomeActivity : Activity() {
 
         card.addView(ParentUi.spacer(this, 12))
 
-        // 第二行：主操作「进入管理」+ 「ADB 修权限」+ 「复制电脑网址」
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-        btnRow.addView(ParentUi.primaryButton(this, p, "进入管理后台") {
+        btnRow.addView(ParentUi.primaryButton(this, p, "进入后台") {
             openDeviceConsole(dev)
         }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.3f)
@@ -350,12 +327,7 @@ class ParentHomeActivity : Activity() {
         })
         btnRow.addView(ParentUi.spacer(this, 1, 8))
         btnRow.addView(ParentUi.secondaryButton(this, p, "复制网址") {
-            ParentUi.copyToClipboard(
-                this,
-                "StudyOnTV Admin URL",
-                dev.adminUrl,
-                "已复制 ${dev.adminUrl}，可在电脑浏览器直接打开"
-            )
+            ParentUi.copyToClipboard(this, "StudyOnTV Admin URL", dev.adminUrl, "已复制 ${dev.adminUrl}")
         })
         card.addView(btnRow)
 
@@ -364,10 +336,11 @@ class ParentHomeActivity : Activity() {
 
     private fun showDeviceMenu(anchor: View, dev: DeviceStore.SavedDevice) {
         val menu = PopupMenu(this, anchor)
-        menu.menu.add(0, 1, 0, if (dev.pinned) "取消置顶" else "置顶此设备")
-        menu.menu.add(0, 2, 1, "立即探测连通性")
-        menu.menu.add(0, 3, 2, "无线 ADB 重装/升级此设备")
-        menu.menu.add(0, 4, 3, "从列表中移除")
+        menu.menu.add(0, 1, 0, if (dev.pinned) "取消置顶" else "置顶")
+        menu.menu.add(0, 2, 1, "刷新状态")
+        menu.menu.add(0, 3, 2, "无线 ADB 重装 / 升级")
+        if (DeviceStore.hasSessionToken(this, dev.id)) menu.menu.add(0, 5, 3, "清除登录状态")
+        menu.menu.add(0, 4, 4, "移除")
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> {
@@ -376,6 +349,11 @@ class ParentHomeActivity : Activity() {
                 }
                 2 -> probeSingleHost(dev.host, openOnSuccess = false)
                 3 -> openAdbWizard(prefillIp = dev.ip, fixOnly = false)
+                5 -> {
+                    DeviceStore.saveSessionToken(this, dev.id, "")
+                    renderDevices()
+                    Toast.makeText(this, "已清除登录状态", Toast.LENGTH_SHORT).show()
+                }
                 4 -> {
                     devices = DeviceStore.remove(this, dev.id)
                     renderDevices()
@@ -390,29 +368,24 @@ class ParentHomeActivity : Activity() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val pad = ParentUi.dp(this@ParentHomeActivity, 20)
-            setPadding(pad, ParentUi.dp(this@ParentHomeActivity, 12), pad, 0)
+            setPadding(pad, ParentUi.dp(this@ParentHomeActivity, 10), pad, 0)
         }
-        container.addView(TextView(this).apply {
-            text = "输入电视上「题了个题」显示的局域网地址（默认端口 8099，可只填 IP）："
-            textSize = 13f
-            setTextColor(p.textSecondary)
-        })
         val input = EditText(this).apply {
-            hint = "例如 192.168.1.88 或 192.168.1.88:8099"
+            hint = "例如 192.168.1.88（默认端口 8099）"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             isSingleLine = true
         }
         container.addView(input)
 
         AlertDialog.Builder(this)
-            .setTitle("手动添加家庭设备")
+            .setTitle("添加设备 IP")
             .setView(container)
             .setNegativeButton("取消", null)
-            .setPositiveButton("探测并添加") { _, _ ->
+            .setPositiveButton("连接") { _, _ ->
                 val raw = input.text?.toString().orEmpty().trim()
                 val parsed = LanNet.parsePrivateLanHost(raw, LanNet.DEFAULT_HTTP_PORT)
                 if (parsed == null) {
-                    Toast.makeText(this, "请输入有效的私有局域网 IP（如 192.168.x.x）", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "请输入局域网 IP（如 192.168.x.x）", Toast.LENGTH_SHORT).show()
                 } else {
                     probeSingleHost(parsed.host, openOnSuccess = true)
                 }

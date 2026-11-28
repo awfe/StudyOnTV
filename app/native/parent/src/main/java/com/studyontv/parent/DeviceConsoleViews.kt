@@ -132,27 +132,27 @@ internal class DeviceConsoleViews(
             )
         }
         overlay.addView(TextView(activity).apply {
-            text = "暂时连不上「$deviceName」"
+            text = "连不上「$deviceName」"
             textSize = 18f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(p.textPrimary)
             gravity = Gravity.CENTER
         })
         offlineDescView = TextView(activity).apply {
-            text = "请确认电视已打开「题了个题」且手机与电视在同一个 Wi-Fi 下。"
+            text = "请确认设备已打开「题了个题」且在同一 Wi-Fi"
             textSize = 13.5f
             setTextColor(p.textSecondary)
             gravity = Gravity.CENTER
             setPadding(0, dp(10), 0, dp(18))
         }
         overlay.addView(offlineDescView)
-        overlay.addView(ParentUi.primaryButton(activity, p, "重新连接") { callbacks.onReconnect() })
+        overlay.addView(ParentUi.primaryButton(activity, p, "重试") { callbacks.onReconnect() })
         overlay.addView(ParentUi.spacer(activity, 10))
-        overlay.addView(ParentUi.tintedButton(activity, p.accentSoft, p.accentText, "无线 ADB 唤醒 / 修复权限") {
+        overlay.addView(ParentUi.tintedButton(activity, p.accentSoft, p.accentText, "无线 ADB 修复") {
             callbacks.onOpenAdbFix()
         })
         overlay.addView(ParentUi.spacer(activity, 10))
-        overlay.addView(ParentUi.secondaryButton(activity, p, "返回设备列表") { callbacks.onBack() })
+        overlay.addView(ParentUi.secondaryButton(activity, p, "返回") { callbacks.onBack() })
         return overlay
     }
 
@@ -172,8 +172,8 @@ internal class DeviceConsoleViews(
     fun isOfflineVisible(): Boolean = offlineOverlay.visibility == View.VISIBLE
 
     fun showOffline(reason: String) {
-        val suffix = if (reason.isNotBlank()) "\n（详情：$reason）" else ""
-        offlineDescView.text = "请确认电视已打开「题了个题」且手机与电视在同一个 Wi-Fi 下。$suffix"
+        val suffix = if (reason.isNotBlank()) "\n$reason" else ""
+        offlineDescView.text = "请确认设备已打开「题了个题」且在同一 Wi-Fi$suffix"
         offlineOverlay.visibility = View.VISIBLE
     }
 }

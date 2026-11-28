@@ -24,11 +24,14 @@ for (const bootFreeIntervalMinutes of [-1, 1.5, 1441]) {
   assert.equal(ruleSchema.safeParse({...defaults,bootFreeIntervalMinutes}).success,false);
 }
 const legacy={...defaults} as Record<string,unknown>;
-delete legacy.shuffleOptions;delete legacy.showCountdown;delete legacy.bootFreeIntervalMinutes;
+delete legacy.shuffleOptions;delete legacy.showCountdown;delete legacy.countdownPosition;delete legacy.bootFreeIntervalMinutes;
 const migrated=ruleSchema.parse(legacy);
 assert.equal(migrated.shuffleOptions,false);
 assert.equal(migrated.showCountdown,true);
+assert.equal(migrated.countdownPosition,'top-right');
 assert.equal(migrated.bootFreeIntervalMinutes,0);
+assert.equal(ruleSchema.parse({...defaults,countdownPosition:'bottom-left'}).countdownPosition,'bottom-left');
+assert.equal(ruleSchema.safeParse({...defaults,countdownPosition:'center'}).success,false);
 // #136：旧版本没有「错题优先」，读出来默认关闭
 delete legacy.wrongFirst;
 assert.equal(ruleSchema.parse(legacy).wrongFirst,false);

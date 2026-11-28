@@ -1,5 +1,7 @@
 package com.studyontv.tv
 
+import android.view.Gravity
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -52,5 +54,33 @@ class ApkInstallerTest {
         assertFalse(ApkInstaller.confirmProbeResult { false })
         assertTrue(ApkInstaller.confirmProbeResult { true })
         assertFalse(ApkInstaller.confirmProbeResult { throw SecurityException("probe blocked") })
+    }
+
+    @Test
+    fun packageMismatchErrorExplainsDebugVsReleaseAndCrossFlavor() {
+        assertNull(ApkInstaller.packageMismatchError("com.studyontv.mobile", "com.studyontv.mobile"))
+        val debugToRelease = ApkInstaller.packageMismatchError("com.studyontv.mobile.debug", "com.studyontv.mobile")
+        assertNotNull(debugToRelease)
+        assertTrue(debugToRelease!!.contains("开发调试版"))
+        assertTrue(debugToRelease.contains("正式版"))
+
+        val crossFlavor = ApkInstaller.packageMismatchError("com.studyontv.mobile", "com.studyontv.tv")
+        assertNotNull(crossFlavor)
+        assertTrue(crossFlavor!!.contains("com.studyontv.mobile"))
+        assertTrue(crossFlavor.contains("com.studyontv.tv"))
+    }
+
+    @Test
+    fun countdownOverlayPositionNormalizationAndGravityMapping() {
+        assertEquals("top-right", CountdownOverlay.normalizePosition(""))
+        assertEquals("top-right", CountdownOverlay.normalizePosition("center"))
+        assertEquals("top-left", CountdownOverlay.normalizePosition("top-left"))
+        assertEquals("bottom-right", CountdownOverlay.normalizePosition("bottom-right"))
+        assertEquals("bottom-left", CountdownOverlay.normalizePosition("bottom-left"))
+
+        assertEquals(Gravity.TOP or Gravity.END, CountdownOverlay.resolveGravity("top-right"))
+        assertEquals(Gravity.TOP or Gravity.START, CountdownOverlay.resolveGravity("top-left"))
+        assertEquals(Gravity.BOTTOM or Gravity.END, CountdownOverlay.resolveGravity("bottom-right"))
+        assertEquals(Gravity.BOTTOM or Gravity.START, CountdownOverlay.resolveGravity("bottom-left"))
     }
 }

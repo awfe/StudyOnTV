@@ -12,6 +12,10 @@ import java.util.Locale
 object DeviceStore {
     private const val PREF_NAME = "sotv_parent_devices"
     private const val KEY_DEVICES = "devices_v1"
+    private const val PREF_SESSIONS = "sotv_parent_sessions"
+    private val TOKEN_REGEX = Regex("^[0-9a-f]{64}$")
+
+    internal fun isValidSessionToken(token: String): Boolean = TOKEN_REGEX.matches(token.trim())
 
     data class SavedDevice(
         val id: String,
@@ -137,6 +141,28 @@ object DeviceStore {
     fun remove(context: Context, id: String): List<SavedDevice> {
         val updated = load(context).filterNot { it.id == id }
         saveAll(context, updated)
+        saveSessionToken(context, id, "")
         return updated
     }
+
+    /** 按 deviceId 持久化 30 天免密会话令牌（不存明文密码），路由器换 IP 后依然免重登。 */
+    fun saveSessionToken(context: Context, deviceId: String, token: String) {
+        val key = deviceId.trim()
+        if (key.isEmpty()) return
+        val clean = token.trim()
+        val editor = context.getSharedPreferences(PREF_SESSIONS, Context.MODE_PRIVATE).edit()
+        if (isValidSessionToken(clean)) editor.putString(key, clean) else editor.remove(key)
+        editor.apply()
+    }
+
+    fun loadSessionToken(context: Context, deviceId: String): String {
+        val key = deviceId.trim()
+        if (key.isEmpty()) return ""
+        val saved = context.getSharedPreferences(PREF_SESSIONS, Context.MODE_PRIVATE)
+            .getString(key, "").orEmpty().trim()
+        return if (isValidSessionToken(saved)) saved else ""
+    }
+
+    fun hasSessionToken(context: Context, deviceId: String): Boolean =
+        loadSessionToken(context, deviceId).isNotEmpty()
 }

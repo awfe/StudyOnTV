@@ -103,11 +103,11 @@ internal class AdbWizardViews(
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f)
         }
         val content = col { setPadding(dp(16), dp(14), dp(16), dp(32)) }
-        content.addView(ParentUi.sectionTitle(activity, p, "第 1 步 · 先在电视上打开「ADB 调试」"))
+        content.addView(ParentUi.sectionTitle(activity, p, "1. 打开设备 ADB 调试"))
         content.addView(buildBrandGuideCard())
-        content.addView(ParentUi.sectionTitle(activity, p, "第 2 步 · 选择家里开启 ADB 的电视或平板"))
+        content.addView(ParentUi.sectionTitle(activity, p, "2. 目标设备"))
         content.addView(buildTargetCard(prefillIp))
-        content.addView(ParentUi.sectionTitle(activity, p, "第 3 步 · 选择安装或修复模式"))
+        content.addView(ParentUi.sectionTitle(activity, p, "3. 安装或修复"))
         content.addView(buildModeCard())
         content.addView(buildProgressCard())
         mainScroll.addView(content)
@@ -125,7 +125,7 @@ internal class AdbWizardViews(
             isFocusable = true
             setOnClickListener { callbacks.onBack() }
         })
-        addView(label("无线 ADB 一键装机 / 修权限", 16.5f, p.textPrimary, bold = true).apply {
+        addView(label("无线 ADB 安装 / 修权限", 16.5f, p.textPrimary, bold = true).apply {
             setPadding(dp(4), 0, 0, 0)
         })
     }
@@ -148,7 +148,7 @@ internal class AdbWizardViews(
 
     private fun buildTargetCard(prefillIp: String): LinearLayout {
         val targetCard = ParentUi.card(activity, p, paddingDp = 14)
-        scanAdbBtn = ParentUi.tintedButton(activity, p.accentSoft, p.accentText, "扫描局域网无线 ADB（5555）") {
+        scanAdbBtn = ParentUi.tintedButton(activity, p.accentSoft, p.accentText, "扫描 5555") {
             callbacks.onScanAdb()
         }
         scanAdbStatus = label(sizeSp = 12f, color = p.textMuted).apply {
@@ -161,11 +161,11 @@ internal class AdbWizardViews(
         })
         candidatesContainer = col { setPadding(0, dp(8), 0, 0) }
         targetCard.addView(candidatesContainer)
-        targetCard.addView(label("目标设备局域网 IP（默认端口 5555，无线调试非 5555 端口请填 IP:端口）", 12f, p.textMuted).apply {
+        targetCard.addView(label("设备 IP（默认端口 5555，可填 IP:端口）", 12f, p.textMuted).apply {
             setPadding(0, dp(8), 0, dp(4))
         })
         ipInput = EditText(activity).apply {
-            hint = "例如 192.168.31.66"
+            hint = "192.168.31.66"
             setText(prefillIp)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             isSingleLine = true
@@ -181,10 +181,10 @@ internal class AdbWizardViews(
 
     private fun buildModeCard(): LinearLayout {
         val modeCard = ParentUi.card(activity, p, paddingDp = 14)
-        modeInstallBtn = makeModeButton("全新安装 / 升级\n+ 自动配齐权限") {
+        modeInstallBtn = makeModeButton("安装 / 升级\n并配权限") {
             callbacks.onSelectMode(TvProvisioner.Mode.INSTALL_AND_CONFIGURE)
         }
-        modeFixBtn = makeModeButton("仅一键修复权限\n（已装题了个题）") {
+        modeFixBtn = makeModeButton("仅修权限\n（已安装）") {
             callbacks.onSelectMode(TvProvisioner.Mode.FIX_PERMISSIONS_ONLY)
         }
         modeCard.addView(row {
@@ -194,12 +194,12 @@ internal class AdbWizardViews(
         })
 
         apkSourceBox = col { setPadding(0, dp(12), 0, 0) }
-        apkSourceBox.addView(label("安装包来源（自动优先走国内蒲公英加速，也支持直接选手机本地 APK）：", 12f, p.textMuted).apply {
+        apkSourceBox.addView(label("安装包", 12f, p.textMuted).apply {
             setPadding(0, 0, 0, dp(8))
         })
-        srcTvBtn = makeChoiceRow("在线下载最新「电视 / 盒子 / 投影仪版」（推荐电视）") { callbacks.onSelectApkSource(ApkSource.AUTO_TV) }
-        srcMobileBtn = makeChoiceRow("在线下载最新「手机 / 平板版」（适合安卓平板/旧手机）") { callbacks.onSelectApkSource(ApkSource.AUTO_MOBILE) }
-        srcLocalBtn = makeChoiceRow("从手机选取本地已下载的 .apk 安装包…") { callbacks.onSelectApkSource(ApkSource.LOCAL_FILE) }
+        srcTvBtn = makeChoiceRow("自动下载 · 电视 / 盒子版") { callbacks.onSelectApkSource(ApkSource.AUTO_TV) }
+        srcMobileBtn = makeChoiceRow("自动下载 · 手机 / 平板版") { callbacks.onSelectApkSource(ApkSource.AUTO_MOBILE) }
+        srcLocalBtn = makeChoiceRow("选择本地 APK…") { callbacks.onSelectApkSource(ApkSource.LOCAL_FILE) }
         apkSourceBox.addView(srcTvBtn)
         apkSourceBox.addView(ParentUi.spacer(activity, 6))
         apkSourceBox.addView(srcMobileBtn)
@@ -213,7 +213,7 @@ internal class AdbWizardViews(
         apkSourceBox.addView(localApkInfoView)
         modeCard.addView(apkSourceBox)
         modeCard.addView(ParentUi.spacer(activity, 14))
-        startBtn = ParentUi.primaryButton(activity, p, "开始一键安装并配置全部权限") {
+        startBtn = ParentUi.primaryButton(activity, p, "开始安装并配权限") {
             callbacks.onStartProvisioning()
         }
         modeCard.addView(startBtn)
@@ -225,9 +225,9 @@ internal class AdbWizardViews(
             visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(14) }
         }
-        progressCard.addView(label("执行进度", 15f, p.textPrimary, bold = true).apply { setPadding(0, 0, 0, dp(8)) })
+        progressCard.addView(label("进度", 15f, p.textPrimary, bold = true).apply { setPadding(0, 0, 0, dp(8)) })
         approvalBanner = label(
-            "📺 请看电视屏幕！\n请用遥控器勾选「一律允许此计算机调试」，然后点「允许 / 确定」",
+            "请在设备弹窗勾选「一律允许」并确认",
             13.5f, p.amber, bold = true
         ).apply {
             val pad = dp(12)
@@ -249,7 +249,7 @@ internal class AdbWizardViews(
         summaryText = label(sizeSp = 13f, color = p.textPrimary, lineMult = 1.3f)
         summaryBox.addView(summaryText)
         summaryBox.addView(ParentUi.spacer(activity, 10))
-        openConsoleBtn = ParentUi.primaryButton(activity, p, "立即进入家长管理后台 →") {
+        openConsoleBtn = ParentUi.primaryButton(activity, p, "进入后台") {
             callbacks.onOpenConsole()
         }.apply { visibility = View.GONE }
         summaryBox.addView(openConsoleBtn)
@@ -291,7 +291,8 @@ internal class AdbWizardViews(
         }
         val current = BrandGuides.ALL[selectedBrandIdx]
         guideStepsView.text = current.steps.mapIndexed { i, s -> "${i + 1}. $s" }.joinToString("\n")
-        guideTipView.text = "提示：${current.tip}"
+        guideTipView.visibility = if (current.tip.isBlank()) View.GONE else View.VISIBLE
+        guideTipView.text = current.tip
     }
 
     fun renderModeAndSource(
@@ -309,12 +310,12 @@ internal class AdbWizardViews(
         applyChoiceStyle(srcMobileBtn, apkSource == ApkSource.AUTO_MOBILE)
         applyChoiceStyle(srcLocalBtn, apkSource == ApkSource.LOCAL_FILE)
         localApkInfoView.visibility = if (apkSource == ApkSource.LOCAL_FILE && hasLocalApk) {
-            localApkInfoView.text = "已选本地包：$localApkLabel"
+            localApkInfoView.text = "已选：$localApkLabel"
             View.VISIBLE
         } else View.GONE
         if (!isRunning) {
             startBtn.isEnabled = true
-            startBtn.text = if (isInstall) "开始一键安装并配置全部权限" else "开始一键修复全部权限"
+            startBtn.text = if (isInstall) "开始安装并配权限" else "开始修复权限"
         }
     }
 

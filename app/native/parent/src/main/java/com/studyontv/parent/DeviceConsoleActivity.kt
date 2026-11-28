@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
+import android.webkit.JavascriptInterface
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
 import android.webkit.URLUtil
@@ -46,10 +47,21 @@ class DeviceConsoleActivity : Activity() {
 
     private lateinit var views: DeviceConsoleViews
     private lateinit var targetHost: LanNet.ParsedHost
+    private var deviceId: String = ""
     private var deviceName: String = ""
     private var pendingFileCallback: ValueCallback<Array<Uri>>? = null
     private var pendingDownloadUrl: String? = null
     private var pendingDownloadUserAgent: String? = null
+
+    private inner class ParentSessionBridge {
+        @JavascriptInterface
+        fun getSavedToken(): String = DeviceStore.loadSessionToken(this@DeviceConsoleActivity, deviceId)
+
+        @JavascriptInterface
+        fun saveToken(token: String?) {
+            DeviceStore.saveSessionToken(this@DeviceConsoleActivity, deviceId, token.orEmpty())
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,11 +73,12 @@ class DeviceConsoleActivity : Activity() {
         val port = intent.getIntExtra(EXTRA_PORT, LanNet.DEFAULT_HTTP_PORT)
         val parsed = LanNet.parsePrivateLanHost("$ip:$port", LanNet.DEFAULT_HTTP_PORT)
         if (parsed == null) {
-            Toast.makeText(this, "无效的局域网设备地址", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "无效的设备地址", Toast.LENGTH_SHORT).show()
             finish()
             return
         }
         targetHost = parsed
+        deviceId = intent.getStringExtra(EXTRA_DEVICE_ID).orEmpty().ifBlank { parsed.host }
         deviceName = intent.getStringExtra(EXTRA_DEVICE_NAME).orEmpty().ifBlank { parsed.ip }
 
         views = DeviceConsoleViews(
@@ -107,6 +120,8 @@ class DeviceConsoleActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView() {
         val webView = views.webView
+        CookieManager.getInstance().setAcceptCookie(true)
+        webView.addJavascriptInterface(ParentSessionBridge(), "StudyOnTVParent")
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -336,6 +351,11 @@ class DeviceConsoleActivity : Activity() {
         } else {
             super.onBackPressed()
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try { CookieManager.getInstance().flush() } catch (_: Exception) { }
     }
 
     override fun onDestroy() {

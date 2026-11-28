@@ -342,11 +342,12 @@ internal fun GateService.updateCountdownImpl(status: JSONObject, state: GateTick
     // 同一播放器短暂缓冲时保留角标，切换应用、关屏或进入管控页仍立即隐藏。
     val recentlyActive = countdownActiveAt >= 0 && now - countdownActiveAt < 12_000 && pkg == countdownPackage
     val seconds = status.optLong("remainingSeconds") + status.optLong("freeQuotaSeconds")
-    val show = DeviceRuntime.store.config().optBoolean("showCountdown", true) && canOverlay && awake &&
+    val cfg = DeviceRuntime.store.config()
+    val show = cfg.optBoolean("showCountdown", true) && canOverlay && awake &&
         monitoring && !ownForeground && !settingsBlocked && (pkg == null || !exempt(pkg, false)) &&
         (active || recentlyActive) && !free && status.optString("reason").isEmpty() &&
         status.optJSONObject("override") == null && seconds > 0 && !GateService.hasGate()
-    if (show) countdown.update(seconds) else {
+    if (show) countdown.update(seconds, cfg.optString("countdownPosition", "top-right")) else {
         countdown.hide()
         countdownActiveAt = -1L
         countdownPackage = null

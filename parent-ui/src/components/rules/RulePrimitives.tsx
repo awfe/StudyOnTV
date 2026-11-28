@@ -29,6 +29,7 @@ export const fieldLabels: Record<string, string> = {
   dailyLimitEnabled: '启用每日时长上限',
   shuffleOptions: '随机打乱选项',
   showCountdown: '显示剩余时间角标',
+  countdownPosition: '倒计时角标位置',
   roundsLimitEnabled: '启用每日组数上限',
   restEnabled: '强制休息',
   trafficAssistEnabled: '按流量判断是否在播放',

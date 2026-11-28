@@ -313,15 +313,44 @@ export default function TaskRulesTab({
               </Field>
 
               {supervisionEnabled && (
-                <Field orientation="responsive" className="py-3.5">
-                  <FieldContent>
-                    <FieldTitle>显示剩余时间角标</FieldTitle>
-                    <FieldDescription className="text-xs leading-5">
-                      右上角显示剩余分钟；最后一分钟闪烁
-                    </FieldDescription>
-                  </FieldContent>
-                  {toggle('showCountdown')}
-                </Field>
+                <>
+                  <Field orientation="responsive" className="py-3.5">
+                    <FieldContent>
+                      <FieldTitle>显示剩余时间角标</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">
+                        看视频时在屏幕角落显示剩余分钟；最后一分钟闪烁
+                      </FieldDescription>
+                    </FieldContent>
+                    {toggle('showCountdown')}
+                  </Field>
+                  {c.showCountdown && (
+                    <Field orientation="responsive" className="py-3.5">
+                      <FieldContent>
+                        <FieldTitle>倒计时角标位置</FieldTitle>
+                        <FieldDescription className="text-xs leading-5">
+                          可避开电视右上角默认时间或底部字幕位置
+                        </FieldDescription>
+                      </FieldContent>
+                      <Controller
+                        name="countdownPosition"
+                        control={form.control}
+                        render={({ field }) => (
+                          <Choice
+                            label="倒计时角标位置"
+                            value={field.value}
+                            onChange={field.onChange}
+                            options={[
+                              ['top-right', '右上角'],
+                              ['top-left', '左上角'],
+                              ['bottom-right', '右下角'],
+                              ['bottom-left', '左下角'],
+                            ]}
+                          />
+                        )}
+                      />
+                    </Field>
+                  )}
+                </>
               )}
 
               <Field orientation="responsive" className="py-3.5">

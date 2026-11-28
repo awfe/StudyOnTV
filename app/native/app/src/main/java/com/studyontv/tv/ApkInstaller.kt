@@ -93,6 +93,14 @@ object ApkInstaller {
         else -> null
     }
 
+    internal fun packageMismatchError(currentPkg: String, archivePkg: String): String? {
+        if (archivePkg == currentPkg) return null
+        if (currentPkg.endsWith(".debug") && archivePkg == currentPkg.removeSuffix(".debug")) {
+            return "当前为开发调试版（$currentPkg），无法直接用正式版（$archivePkg）在线覆盖升级，请直接安装正式版 APK"
+        }
+        return "安装包与本应用不符（当前 $currentPkg，安装包 $archivePkg）"
+    }
+
     /** 包名一致、版本更高、签名与当前安装的版本一致（无副作用，返回错误文案，null 表示通过） */
     @Suppress("DEPRECATION")
     private fun validateArchive(ctx: Context, file: File): String? {
@@ -104,7 +112,7 @@ object ApkInstaller {
         val archive = ctx.packageManager.getPackageArchiveInfo(file.absolutePath, flags) ?: return "安装包损坏或不完整"
         archive.applicationInfo?.let { it.sourceDir = file.absolutePath; it.publicSourceDir = file.absolutePath }
         val current = ctx.packageManager.getPackageInfo(ctx.packageName, flags)
-        if (archive.packageName != ctx.packageName) return "安装包与本应用不符"
+        packageMismatchError(ctx.packageName, archive.packageName.orEmpty())?.let { return it }
         if (archive.versionCode <= current.versionCode) return "安装包版本不比当前新"
         val mine = signatures(current)
         val theirs = signatures(archive).ifEmpty { jarSignatures(file) }

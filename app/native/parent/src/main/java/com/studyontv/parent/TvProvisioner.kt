@@ -168,18 +168,18 @@ object TvProvisioner {
 
     internal fun buildPermissionPlan(pkg: String, sdk: Int, mergedA11y: String): List<PermissionSpec> {
         val list = ArrayList<PermissionSpec>()
-        list.add(PermissionSpec("perm_overlay", "悬浮窗锁屏权限（SYSTEM_ALERT_WINDOW）", "appops set $pkg SYSTEM_ALERT_WINDOW allow", if (sdk >= 24) "cmd appops set $pkg SYSTEM_ALERT_WINDOW allow" else null))
-        list.add(PermissionSpec("perm_usage", "应用使用情况权限（GET_USAGE_STATS）", "appops set $pkg GET_USAGE_STATS allow", if (sdk >= 24) "cmd appops set $pkg GET_USAGE_STATS allow" else null))
+        list.add(PermissionSpec("perm_overlay", "悬浮窗权限", "appops set $pkg SYSTEM_ALERT_WINDOW allow", if (sdk >= 24) "cmd appops set $pkg SYSTEM_ALERT_WINDOW allow" else null))
+        list.add(PermissionSpec("perm_usage", "使用情况权限", "appops set $pkg GET_USAGE_STATS allow", if (sdk >= 24) "cmd appops set $pkg GET_USAGE_STATS allow" else null))
         if (sdk >= 26) {
-            list.add(PermissionSpec("perm_install", "应用内在线升级权限（REQUEST_INSTALL_PACKAGES）", "appops set $pkg REQUEST_INSTALL_PACKAGES allow", "cmd appops set $pkg REQUEST_INSTALL_PACKAGES allow"))
+            list.add(PermissionSpec("perm_install", "在线升级权限", "appops set $pkg REQUEST_INSTALL_PACKAGES allow", "cmd appops set $pkg REQUEST_INSTALL_PACKAGES allow"))
         }
-        list.add(PermissionSpec("perm_a11y", "启用无障碍守护服务（合并已有服务）", "settings put secure enabled_accessibility_services '$mergedA11y' && settings put secure accessibility_enabled 1"))
-        list.add(PermissionSpec("perm_secure", "授予无障碍自愈权限（WRITE_SECURE_SETTINGS）", "pm grant $pkg android.permission.WRITE_SECURE_SETTINGS"))
+        list.add(PermissionSpec("perm_a11y", "无障碍服务", "settings put secure enabled_accessibility_services '$mergedA11y' && settings put secure accessibility_enabled 1"))
+        list.add(PermissionSpec("perm_secure", "无障碍自愈权限", "pm grant $pkg android.permission.WRITE_SECURE_SETTINGS"))
         if (sdk >= 33) {
-            list.add(PermissionSpec("perm_notify", "通知权限（Android 13+）", "pm grant $pkg android.permission.POST_NOTIFICATIONS"))
+            list.add(PermissionSpec("perm_notify", "通知权限", "pm grant $pkg android.permission.POST_NOTIFICATIONS"))
         }
         if (sdk >= 23) {
-            list.add(PermissionSpec("perm_battery", "加入省电白名单（防后台被系统清理）", "dumpsys deviceidle whitelist +$pkg", if (sdk >= 24) "cmd deviceidle whitelist +$pkg" else null))
+            list.add(PermissionSpec("perm_battery", "省电白名单", "dumpsys deviceidle whitelist +$pkg", if (sdk >= 24) "cmd deviceidle whitelist +$pkg" else null))
         }
         return list
     }
@@ -305,9 +305,9 @@ object TvProvisioner {
             }
 
             val summary = if (warnCount == 0) {
-                "全部配置已完成（成功 $okCount 项）！建议稍后关闭电视的「ADB 调试」开关，更安全。"
+                "完成（$okCount 项成功）。建议关闭设备 ADB 调试。"
             } else {
-                "主体配置已完成（成功 $okCount 项，另有 $warnCount 项受电视系统限制）。建议稍后关闭电视「ADB 调试」。"
+                "完成（$okCount 项成功，$warnCount 项受系统限制）。建议关闭设备 ADB 调试。"
             }
             return ProvisionResult(true, targetPkg, deviceInfo, discovered, okCount, warnCount, summary)
         } catch (e: Exception) {
