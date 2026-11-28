@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect, useReducer, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, Globe, MoreHorizontal, Plus, Sparkles, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,14 +10,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { api } from './api';
 import BankAutomationPanel from './BankAutomationPanel';
 import {
@@ -30,6 +21,7 @@ import {
   PAGE_SIZE,
   type Filter,
 } from './components/bank/filters';
+import BankActionsBar from './components/bank/BankActionsBar';
 import QuestionFilters from './components/bank/QuestionFilters';
 import QuestionList from './components/bank/QuestionList';
 import QuestionDetailSheet from './components/bank/QuestionDetailSheet';
@@ -236,71 +228,23 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
         meta={meta}
         activeCount={activeFilterCount(filter)}
         actions={
-          <>
-            <Button size="sm" onClick={() => startEdit()}>
-              <Plus />
-              新增题目
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setMarketOpen(true)}>
-              <Globe />
-              在线题库市场
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setImporting(true)}>
-              <Upload />
-              导入 Word/PDF/JSON
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setAiOpen(true)}>
-              <Sparkles />
-              AI 出题
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" className="size-8" aria-label="更多题库操作">
-                  <MoreHorizontal />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-44">
-                <DropdownMenuLabel>导出</DropdownMenuLabel>
-                <DropdownMenuItem disabled={exporting} onSelect={exportBank}>
-                  <Download />
-                  {exporting ? '正在导出…' : '导出全部题目'}
-                </DropdownMenuItem>
-                {selected.length > 0 && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel>已选 {selected.length} 题</DropdownMenuLabel>
-                    <DropdownMenuItem
-                      disabled={bulkPause.isPending}
-                      onSelect={() => bulkPause.mutate({ ids: selected, enabled: false })}
-                    >
-                      暂停选中
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      variant="destructive"
-                      disabled={bulkDelete.isPending}
-                      onSelect={() => bulkDelete.mutate(selected)}
-                    >
-                      <Trash2 />
-                      删除选中
-                    </DropdownMenuItem>
-                  </>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  variant="destructive"
-                  disabled={query.isLoading || clearBank.isPending || !meta.total}
-                  onSelect={() => {
-                    if (window.confirm('确定清空全部题库（包括已暂停的题目）？此操作无法撤销，建议先导出备份。')) {
-                      clearBank.mutate();
-                    }
-                  }}
-                >
-                  <Trash2 />
-                  清空题库
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </>
+          <BankActionsBar
+            selectedCount={selected.length}
+            totalCount={meta.total}
+            loading={query.isLoading}
+            exporting={exporting}
+            bulkPausePending={bulkPause.isPending}
+            bulkDeletePending={bulkDelete.isPending}
+            clearBankPending={clearBank.isPending}
+            onCreate={() => startEdit()}
+            onOpenMarket={() => setMarketOpen(true)}
+            onOpenImport={() => setImporting(true)}
+            onOpenAi={() => setAiOpen(true)}
+            onExport={exportBank}
+            onPauseSelected={() => bulkPause.mutate({ ids: selected, enabled: false })}
+            onDeleteSelected={() => bulkDelete.mutate(selected)}
+            onClearBank={() => clearBank.mutate()}
+          />
         }
       />
 
