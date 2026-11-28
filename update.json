@@ -1,21 +1,21 @@
 {
-  "version": "0.5.8",
-  "versionCode": 55,
+  "version": "0.5.9",
+  "versionCode": 56,
   "force": false,
-  "notes": "v0.5.8\n\n- **题目解析朗读**：开启自动朗读后，答题反馈及闪卡/错题翻面均自动朗读题目解析；手动点击「朗读」按钮也会一并朗读答案与解析（合并 #191 英文题标点防重读修复）。\n- **在线更新修复（#189）**：融合 #190 并新增 JAR 证书读取兜底，修复 Android 9/10 设备在线更新误报「安装包签名与当前版本不一致，已拒绝」；修复版本更新页将「蒲公英：当前已是最新版本」误报为「上次检查没成功」的问题。\n- **答题端电视/触屏交互优化**：修复切换孩子 PIN 弹窗焦点冲突（电视 D-Pad 可正常选数字、手机不再拉起系统键盘遮挡按键）；纯粹学习模式新增「返回学习中心」入口并支持返回键退出；强化电视焦点框可见度与触控胶囊高度。\n- **家长端多设备排版优化**：修复手机窄屏下后台保活状态标签竖排挤压、深色模式禁用主按钮低对比度、iPad 1024px 横屏设置页三栏挤压，以及触控平板每周时段表自动默认竖排。\n- **国际化贡献（#193）**：新增越南语（Tiếng Việt）README 与 Home Assistant 集成翻译。",
-  "publishedAt": "2026-11-25T22:52:40.455Z",
+  "notes": "v0.5.9\n\n- **观看时间倒计时偏慢根因修复（ST-618）**：\n  - 移除单次扣时 5 秒硬截断，改用双时钟真实清醒差值与单事务顺延扣减（`free_quota -> boot_quota -> credit`），息屏即刻结算，解决手机/平板后台省电合并唤醒导致倒计时变慢 1.36x–2.11x 的问题；\n  - 进程被系统回收期间的补算上限扩至 60 分钟并取消超过 10 分钟悬崖归零，观看中被回收时保留心跳，解决后台被杀后观看时长暴涨 3x–19x 的问题；\n  - 电视端亮屏播放音视频时防止因久不按遥控器误停计，增强 TV 桌面内嵌播放识别；SQLite 开启 WAL 降低主线程阻塞。\n- **稳定性与崩溃加固**：\n  - 加固 `GateService` 前台服务启动兜底，消除部分 Android 9/11 电视升级后偶发的 `RemoteServiceException` 崩溃；\n  - 精简系统电视盒子缺失 Android System WebView 时自动降级为纯原生引导页（附局域网后台地址），不再无限闪退。\n- **Edge 在线朗读优化**：\n  - 修复英文题自动朗读中文解析时纯英文音色返回空音频的问题（含中文文本自动切换中英混读音色）；\n  - 修复 Android 5.1/6.0 老电视连接微软 Edge 语音缺少 TLS SNI 导致的证书主机名校验失败。\n- **答题与家长面板体验修复**：\n  - 修复答题缓存旧 nonce 导致的「题目已更新，请重新加载」连环报错死循环，异常时自动刷新加载最新题目；\n  - 修复在线更新被用户取消或受系统限制时误报「安装包与系统不兼容」的提示文案；\n  - 修复「远程题库与自动补题」面板点击添加来源或开启自动补题后误触自动保存报错的问题，并为后台 AI 补题增加 401/402/404 熔断与指数退避；\n  - 悬浮窗探针诊断日志按状态变化去重，避免刷屏冲掉有效日志。",
+  "publishedAt": "2026-11-28T02:31:04.212Z",
   "assets": {
     "tv": {
-      "name": "StudyOnTV-Android-TV-v0.5.8.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.8/StudyOnTV-Android-TV-v0.5.8.apk",
-      "sha256": "caa2fb69e2390491776e4f4edd7f1e6d992abfd3abbaf7661d88dcb0bfd5e13d",
-      "size": 3575675
+      "name": "StudyOnTV-Android-TV-v0.5.9.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.9/StudyOnTV-Android-TV-v0.5.9.apk",
+      "sha256": "334dc32e3d140da7c9c9b6c1389feb7c38133e9d5fce16f8cfdc5cd67bf98128",
+      "size": 3581419
     },
     "mobile": {
-      "name": "StudyOnTV-Mobile-v0.5.8.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.8/StudyOnTV-Mobile-v0.5.8.apk",
-      "sha256": "d2ecfdb5b6adf0f9051f1893a9122ed9c639514e543cbed9cd3d8f99f978f56d",
-      "size": 3577281
+      "name": "StudyOnTV-Mobile-v0.5.9.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.9/StudyOnTV-Mobile-v0.5.9.apk",
+      "sha256": "ed4a8384d5459c6941cfb08246f8b435afd799d9a3ee6f4432e6db9efd76c7c3",
+      "size": 3582479
     }
   }
 }
