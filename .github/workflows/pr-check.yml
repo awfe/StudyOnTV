@@ -42,9 +42,9 @@ jobs:
         working-directory: parent-ui
         run: npm run build
 
-      - name: 运行单元测试并编译 TV + Mobile Debug APK（无需签名）
+      - name: 运行单元测试并编译 TV + Mobile + Parent Debug APK（无需签名）
         working-directory: app/native
-        run: gradle testTvDebugUnitTest testMobileDebugUnitTest assembleTvDebug assembleMobileDebug --no-daemon
+        run: gradle testTvDebugUnitTest testMobileDebugUnitTest :parent:testDebugUnitTest assembleTvDebug assembleMobileDebug :parent:assembleDebug --no-daemon
 
   ui-check:
     name: 前端类型检查

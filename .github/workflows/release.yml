@@ -5,9 +5,14 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   build:
     name: 构建 APK 并发布
+    if: github.repository == 'chadyi/StudyOnTV'
     runs-on: ubuntu-latest
     permissions:
       contents: write  # 需要写权限：上传 Release 资产 + commit update.json
@@ -25,6 +30,34 @@ jobs:
           fetch-depth: 0
           # checkout@v4 默认不拉标签，只给触发的那一个 ref 建轻量标签；必须显式拉下来
           fetch-tags: true
+
+      - name: 校验 Tag 与 Gradle 版本一致性（防误发/版本回退）
+        run: |
+          set -euo pipefail
+          TAG=${GITHUB_REF#refs/tags/}
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::非法发版标签格式：$TAG（期望 vX.Y.Z）"
+            exit 1
+          fi
+          python3 - "$TAG" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          tag = sys.argv[1]
+          gradle = Path("app/native/app/build.gradle.kts").read_text(encoding="utf-8")
+          ver = re.search(r'versionName\s*=\s*"([^"]+)"', gradle)
+          code = re.search(r'versionCode\s*=\s*(\d+)', gradle)
+          assert ver and code, "build.gradle.kts 缺少 versionName 或 versionCode"
+          vname, vcode = ver.group(1), int(code.group(1))
+          if f"v{vname}" != tag:
+              raise SystemExit(f"Tag ({tag}) 与 build.gradle.kts versionName (v{vname}) 不一致")
+          manifest = Path("update.json")
+          if manifest.exists():
+              prev = json.loads(manifest.read_text(encoding="utf-8"))
+              prev_code = int(prev.get("versionCode") or 0)
+              if vcode <= prev_code:
+                  raise SystemExit(f"versionCode ({vcode}) 未递增（上一版为 {prev_code}）")
+          print(f"OK release version check: {tag} (versionCode={vcode})")
+          PY
 
       - name: 设置 JDK 17
         uses: actions/setup-java@v4
@@ -61,7 +94,9 @@ jobs:
       - name: 解码签名密钥
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: printf '%s' "$KEYSTORE_BASE64" | base64 -d > "${{ runner.temp }}/keystore.jks"
+        run: |
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "${{ runner.temp }}/keystore.jks"
 
       - name: 写入 local.properties
         env:
@@ -115,7 +150,7 @@ jobs:
       # ── 3. 测试与构建 Android APK ─────────────────────────────────────
       - name: 运行 Android 单元测试
         working-directory: app/native
-        run: gradle testTvDebugUnitTest testMobileDebugUnitTest --no-daemon
+        run: gradle testTvDebugUnitTest testMobileDebugUnitTest :parent:testDebugUnitTest --no-daemon
 
       - name: 构建 TV Release APK（标准版）
         working-directory: app/native
@@ -124,6 +159,10 @@ jobs:
       - name: 构建 Mobile Release APK（标准版）
         working-directory: app/native
         run: gradle assembleMobileRelease --no-daemon
+
+      - name: 构建家长端 Release APK
+        working-directory: app/native
+        run: gradle :parent:assembleRelease --no-daemon
 
       # ── 4. 整理标准版产物 ────────────────────────────────────────────
       - name: 整理标准版产物
@@ -134,6 +173,8 @@ jobs:
              release-artifacts/StudyOnTV-Android-TV-${TAG}.apk
           cp app/native/app/build/outputs/apk/mobile/release/app-mobile-release.apk \
              release-artifacts/StudyOnTV-Mobile-${TAG}.apk
+          cp app/native/parent/build/outputs/apk/release/parent-release.apk \
+             release-artifacts/StudyOnTV-Parent-${TAG}.apk
           echo "TAG=${TAG}" >> $GITHUB_ENV
 
       # ── 4b. 构建 EU 仅本地隐私版（Local-Only，Issue #175）──────────────
@@ -148,12 +189,14 @@ jobs:
           cp app/native/app/build/outputs/apk/mobile/release/app-mobile-release.apk \
              release-artifacts/StudyOnTV-Mobile-EU-LocalOnly-${TAG}.apk
 
-      # ── 5. 生成 update.json 与 GitHub Release 说明 ───────────────────
+      # ── 5. 生成 update.json、SHA256 校验表与 GitHub Release 说明 ──────
       - name: 生成 update.json 与 Release 正文
         run: |
           # actions/checkout@v4 在 tag 触发时会先建轻量标签，必须 --force 拉取附注标签对象才能读到完整发版说明
           git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
           NOTES=$(git tag -l --format='%(contents)' "$TAG" 2>/dev/null || echo "")
+          PREV_TAG=$(git tag --sort=-v:refname 'v*' | grep -v "^${TAG}$" | head -n 1 || true)
+          (cd release-artifacts && sha256sum *.apk > SHA256SUMS.txt)
           node scripts/make-update-manifest.mjs release-artifacts --notes "$NOTES"
           cat > release-notes.md <<EOF
           ${NOTES}
@@ -166,17 +209,23 @@ jobs:
           |---|---|---|
           | \`StudyOnTV-Android-TV-${TAG}.apk\` | 智能电视 / 电视盒子 / 投影仪（Android TV） | **标准电视版（推荐）**：遥控器方向键适配，支持在线更新、云端 AI 出题/批改与在线语音朗读、在线题库市场与节假日同步。 |
           | \`StudyOnTV-Mobile-${TAG}.apk\` | 安卓手机 / 平板（Android Phone & Tablet） | **标准手机/平板版（推荐）**：触屏适配，支持独立做题与管控、在线更新、云端 AI 出题/批改与在线语音朗读。 |
+          | \`StudyOnTV-Parent-${TAG}.apk\` | 家长安卓手机（Android Parent Companion） | **家长端 App（独立轻量包）**：局域网自动发现家里电视/平板一键进后台，支持**无线 ADB（TCP 5555）免 U 盘远程安装与一键开启悬浮窗/使用情况/无障碍权限**；仅申请基础网络权限，零敏感权限。 |
           | \`StudyOnTV-Android-TV-EU-LocalOnly-${TAG}.apk\` | 智能电视 / 电视盒子（Android TV · EU / 隐私增强版） | **仅本地隐私电视版（EU / GDPR Local-Only）**：彻底关闭一切公网连接（无在线更新、无应用内安装、无在线题库/节假日联网、无云端 AI/语音）；AI 仅允许连接家庭局域网本地服务（如 Ollama），朗读仅使用本机系统语音，WebView 拦截所有公网请求，完整保留同 Wi-Fi 扫码管理。 |
           | \`StudyOnTV-Mobile-EU-LocalOnly-${TAG}.apk\` | 安卓手机 / 平板（Android Phone & Tablet · EU / 隐私增强版） | **仅本地隐私手机/平板版（EU / GDPR Local-Only）**：与 EU 电视版相同的纯本地零外联策略，适合注重数据不出局域网的欧洲及隐私敏感家庭。 |
 
-          > **覆盖升级提示 / Upgrade Note**：同形态（TV 覆盖 TV、Mobile 覆盖 Mobile）直接覆盖安装即可，**切勿先卸载旧版**，题库、记录与所有配置会自动保留。
+          > **覆盖升级提示 / Upgrade Note**：同形态（TV 覆盖 TV、Mobile 覆盖 Mobile、Parent 覆盖 Parent）直接覆盖安装即可，**切勿先卸载旧版**，题库、记录与所有配置会自动保留。完整安装包校验见 \`SHA256SUMS.txt\`。
           EOF
+          if [ -n "$PREV_TAG" ]; then
+            printf '\n**完整变更对比 / Full Changelog**: https://github.com/chadyi/StudyOnTV/compare/%s...%s\n' "$PREV_TAG" "$TAG" >> release-notes.md
+          fi
 
       # ── 6. 发布到 GitHub Release（先上传资产，避免 update.json 指向 404）──
       - name: 发布到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-artifacts/*.apk
+          files: |
+            release-artifacts/*.apk
+            release-artifacts/SHA256SUMS.txt
           body_path: release-notes.md
           fail_on_unmatched_files: true
 
