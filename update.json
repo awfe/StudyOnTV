@@ -1,21 +1,21 @@
 {
-  "version": "0.5.9",
-  "versionCode": 56,
+  "version": "0.5.10",
+  "versionCode": 57,
   "force": false,
-  "notes": "v0.5.9\n\n- **观看时间倒计时偏慢根因修复（ST-618）**：\n  - 移除单次扣时 5 秒硬截断，改用双时钟真实清醒差值与单事务顺延扣减（`free_quota -> boot_quota -> credit`），息屏即刻结算，解决手机/平板后台省电合并唤醒导致倒计时变慢 1.36x–2.11x 的问题；\n  - 进程被系统回收期间的补算上限扩至 60 分钟并取消超过 10 分钟悬崖归零，观看中被回收时保留心跳，解决后台被杀后观看时长暴涨 3x–19x 的问题；\n  - 电视端亮屏播放音视频时防止因久不按遥控器误停计，增强 TV 桌面内嵌播放识别；SQLite 开启 WAL 降低主线程阻塞。\n- **稳定性与崩溃加固**：\n  - 加固 `GateService` 前台服务启动兜底，消除部分 Android 9/11 电视升级后偶发的 `RemoteServiceException` 崩溃；\n  - 精简系统电视盒子缺失 Android System WebView 时自动降级为纯原生引导页（附局域网后台地址），不再无限闪退。\n- **Edge 在线朗读优化**：\n  - 修复英文题自动朗读中文解析时纯英文音色返回空音频的问题（含中文文本自动切换中英混读音色）；\n  - 修复 Android 5.1/6.0 老电视连接微软 Edge 语音缺少 TLS SNI 导致的证书主机名校验失败。\n- **答题与家长面板体验修复**：\n  - 修复答题缓存旧 nonce 导致的「题目已更新，请重新加载」连环报错死循环，异常时自动刷新加载最新题目；\n  - 修复在线更新被用户取消或受系统限制时误报「安装包与系统不兼容」的提示文案；\n  - 修复「远程题库与自动补题」面板点击添加来源或开启自动补题后误触自动保存报错的问题，并为后台 AI 补题增加 401/402/404 熔断与指数退避；\n  - 悬浮窗探针诊断日志按状态变化去重，避免刷屏冲掉有效日志。",
-  "publishedAt": "2026-11-28T02:31:04.212Z",
+  "notes": "- **零敏感权限、仅 ~0.7 MB**：独立于孩子端打包，仅申请基础网络权限（`INTERNET` / `ACCESS_NETWORK_STATE`），不触发手机安全软件误报。\n- **局域网自动发现 & 一键进后台**：自动扫描家里运行「题了个题」的电视和平板，按设备 ID 自动跟踪路由器重启后的 IP 变化，点一下直接打开 `/admin/` 家长管理面板（支持文件选择上传与备份导出）。\n- **无线 ADB（`TCP:5555`）一键装电视 & 修权限**：内置纯 Kotlin 零依赖无线 ADB 客户端与常见电视品牌（小米/红米、TCL/雷鸟、海信/Vidda、创维/酷开、索尼、盒子/投影、平板）3 步速查卡；支持免 U 盘远程推送安装包，自动配置悬浮窗、应用使用情况、应用内安装、非破坏性合并无障碍服务、`WRITE_SECURE_SETTINGS`、通知与省电白名单。\n\n- **遥控页新增「临时解锁到本次关机」**（#199，by @awfe）：待机、熄屏与应用重建仍保持解锁，真正关机/断电重启后自动恢复原规则；同步适配家长面板、学习页与 Telegram 状态显示。\n- **网络校时后保留已结算观看额度**（#200，by @awfe）：设备冷启动读到未来系统日期后，网络校时回正时保留本次已消耗额度与完成组数，并防止退回错误系统日期时重复发额度；同步修正时区与夏令时日界统计。\n- **降低 TV 学习页空闲轮询开销**（#198，by @awfe）：新增轻量化 `/api/learning/state` 接口，页面不可见/暂停时停止后台轮询，审核合入时同步补修悬浮窗复用切路由恢复轮询的边界问题。\n- **修复小米电视 Android 14 等缺失确认页导致的在线更新一闪而过**（#203 / closes #201，by @Seyamalam）：提交会话安装前先探测系统 `CONFIRM_INSTALL` 确认页，缺失时直接走 `ACTION_VIEW` 避免 `force-stop` 清空临时 URI 授权。\n- **修复听力题编辑弹窗「单题语速」空值导致的页面异常**（#195，by @chenlingmin）。\n\n- 新增仓库开发守则 `AGENTS.md`、统一 UI 设计规范 `docs/STYLEGUIDE.md`、避坑参考文档与全仓静态守卫 `repo-guard.mjs`（强制 ES5、禁非安全上下文 `randomUUID()`、Token 规范、单文件行数上限、家长端权限红线）。\n- 完成 `parent-ui`、学习页 `app/web` 与 Android 核心模块（`LocalStore`、`LearningEngine`、`GateService`、`LanServer` 等）全仓领域化拆分，`parent-ui` 主包体积减少约 70 KB，发版流水线新增版本号/Tag 强校验与 `SHA256SUMS.txt` 校验文件。",
+  "publishedAt": "2026-11-28T04:25:04.009Z",
   "assets": {
     "tv": {
-      "name": "StudyOnTV-Android-TV-v0.5.9.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.9/StudyOnTV-Android-TV-v0.5.9.apk",
-      "sha256": "334dc32e3d140da7c9c9b6c1389feb7c38133e9d5fce16f8cfdc5cd67bf98128",
-      "size": 3581419
+      "name": "StudyOnTV-Android-TV-v0.5.10.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.10/StudyOnTV-Android-TV-v0.5.10.apk",
+      "sha256": "34e1d514514884c6332074340d097f2e52791e3a51d8f7aa0111791c857156b7",
+      "size": 3618781
     },
     "mobile": {
-      "name": "StudyOnTV-Mobile-v0.5.9.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.9/StudyOnTV-Mobile-v0.5.9.apk",
-      "sha256": "ed4a8384d5459c6941cfb08246f8b435afd799d9a3ee6f4432e6db9efd76c7c3",
-      "size": 3582479
+      "name": "StudyOnTV-Mobile-v0.5.10.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.10/StudyOnTV-Mobile-v0.5.10.apk",
+      "sha256": "1eeb3fa3360b69bcf96e1f315033c64bc9d241f80df524b595bfaa2bff1ad909",
+      "size": 3620901
     }
   }
 }
