@@ -98,19 +98,37 @@ open class MainActivity : Activity() {
             .show()
     }
 
+    private val onApkReady: (Updater.Info) -> Unit = { info ->
+        if (this !is GateActivity) {
+            val newer = Updater.newerThanCurrent(this, info)
+            if (newer != null) pushUpdatePrompt(newer)
+        }
+    }
+
+    private fun pushUpdatePrompt(newer: Updater.Info) {
+        val autoDownload = Updater.resolveAutoDownloadSetting(Prefs.autoDownloadUpdate(this), LocalOnlyGuard.enabled)
+        val ready = Updater.isApkReady(this, newer)
+        if (!Updater.shouldPromptOnDevice(autoDownload, ready, newer.force)) return
+        runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
+            val raw = DeviceBridge(this).updateInfo()
+            if (raw.isEmpty()) return@runOnUiThread
+            if (newer.force) {
+                val intent = Intent(this, UpdateActivity::class.java).putExtra("payload", raw)
+                if (ready) intent.putExtra("apkPath", ApkInstaller.apkFile(this).absolutePath)
+                startActivity(intent)
+            } else {
+                val view = if (!webReleased) web else null
+                view?.evaluateJavascript("window.SOTV_UPDATE&&SOTV_UPDATE($raw)", null)
+            }
+        }
+    }
+
     private fun checkUpdate() {
         if (this is GateActivity) return
         Updater.check(this) { info ->
             val newer = Updater.newerThanCurrent(this, info) ?: return@check
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                val raw = DeviceBridge(this).updateInfo()
-                if (newer.force) startActivity(Intent(this, UpdateActivity::class.java).putExtra("payload", raw))
-                else {
-                    val view = if (!webReleased) web else null
-                    view?.evaluateJavascript("window.SOTV_UPDATE&&SOTV_UPDATE($raw)", null)
-                }
-            }
+            pushUpdatePrompt(newer)
         }
     }
 
@@ -165,6 +183,7 @@ open class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
+        Updater.removeApkReadyListener(onApkReady)
         if (!webReleased) {
             web?.evaluateJavascript("window.SOTV_PAUSE&&SOTV_PAUSE()", null)
             web?.onPause()
@@ -179,6 +198,7 @@ open class MainActivity : Activity() {
         if (Prefs.onboarded(this)) GateService.ensureRunning(this, "app")
         if (this is GateActivity && !DeviceRuntime.learning.status().optBoolean("free")) MediaPause.pause(this)
         if (webReleased) createWeb()
+        if (this !is GateActivity) Updater.addApkReadyListener(onApkReady)
         checkUpdate()
         if (!webReleased) web?.evaluateJavascript("window.SOTV_RESUME&&SOTV_RESUME()", null)
     }

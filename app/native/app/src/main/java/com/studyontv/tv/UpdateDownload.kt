@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import org.json.JSONObject
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -16,7 +17,49 @@ import java.util.concurrent.atomic.AtomicReference
 internal object UpdateDownload {
     private const val UPDATE_NOTIFICATION_ID = 1007
     private const val UPDATE_CHANNEL_ID = "sotv_update"
+    internal const val PRE_DOWNLOAD_RETRY_COOLDOWN_MS = 10 * 60 * 1000L
     private val installSnapshotRef = AtomicReference(Updater.InstallSnapshot())
+    private val apkReadyListeners = CopyOnWriteArrayList<(Updater.Info) -> Unit>()
+    @Volatile private var lastPreDownloadAtMs = 0L
+    @Volatile private var lastPreDownloadVersion = ""
+
+    fun addApkReadyListener(listener: (Updater.Info) -> Unit) {
+        apkReadyListeners.addIfAbsent(listener)
+    }
+
+    fun removeApkReadyListener(listener: (Updater.Info) -> Unit) {
+        apkReadyListeners.remove(listener)
+    }
+
+    private fun notifyApkReady(info: Updater.Info) {
+        for (listener in apkReadyListeners) {
+            try { listener(info) } catch (_: Throwable) { }
+        }
+    }
+
+    /** 开启后台自动下载时，非强制更新必须等安装包下载校验就绪后再弹提示；关闭自动下载或强制更新时立即提示。 */
+    fun shouldPromptOnDevice(autoDownload: Boolean, apkReady: Boolean, force: Boolean): Boolean =
+        force || !autoDownload || apkReady
+
+    fun canRetryPreDownload(
+        lastAttemptMs: Long,
+        lastVersion: String,
+        targetVersion: String,
+        nowMs: Long
+    ): Boolean = lastAttemptMs <= 0L ||
+        lastVersion != targetVersion ||
+        nowMs - lastAttemptMs >= PRE_DOWNLOAD_RETRY_COOLDOWN_MS
+
+    fun cleanupObsoleteApk(ctx: Context) {
+        val savedVer = Prefs.readyApkVersion(ctx).trim()
+        if (savedVer.isEmpty() || Updater.isNewer(savedVer, Updater.currentVersion(ctx))) return
+        if (currentInstallSnapshot().state != "idle") return
+        try {
+            val f = ApkInstaller.apkFile(ctx)
+            if (f.exists()) f.delete()
+        } catch (_: Exception) { }
+        clearReadyApk(ctx)
+    }
 
     fun checkApkReady(
         fileExists: Boolean,
@@ -160,19 +203,26 @@ internal object UpdateDownload {
         }
     }
 
-    /** 发现新版本且家长开启了后台自动预下载时，静默在后台下载并校验 APK 到本地缓存。 */
-    fun preDownloadIfNeeded(ctx: Context, info: Updater.Info?) {
+    /** 发现新版本且家长开启了后台自动预下载时，静默在后台下载并校验 APK 到本地缓存，完成后再通知界面弹提示。 */
+    fun preDownloadIfNeeded(ctx: Context, info: Updater.Info?, forceRetry: Boolean = false) {
         val newer = Updater.newerThanCurrent(ctx, info)
         val autoEnabled = resolveAutoDownloadSetting(Prefs.autoDownloadUpdate(ctx), LocalOnlyGuard.enabled)
         if (!shouldPreDownload(LocalOnlyGuard.enabled, autoEnabled, newer, isApkReady(ctx, newer))) {
             return
         }
         val targetInfo = newer!!
+        val nowMs = System.currentTimeMillis()
+        if (!forceRetry && !canRetryPreDownload(lastPreDownloadAtMs, lastPreDownloadVersion, targetInfo.latest, nowMs)) {
+            return
+        }
         if (!tryBeginInstall(targetInfo.latest, message = "正在后台预下载 v${targetInfo.latest}…")) {
             return
         }
+        lastPreDownloadAtMs = nowMs
+        lastPreDownloadVersion = targetInfo.latest
         val appCtx = ctx.applicationContext ?: ctx
         Thread {
+            var ready = false
             try {
                 Diag.info("Update", "starting background pre-download for v${targetInfo.latest}")
                 val file = ApkInstaller.download(
@@ -193,6 +243,7 @@ internal object UpdateDownload {
                 )
                 if (file != null) {
                     markApkReady(appCtx, targetInfo.latest, targetInfo.sha256.ifBlank { ApkInstaller.lastDownloadSha256 })
+                    ready = true
                     Diag.info("Update", "background pre-download ready for v${targetInfo.latest}")
                 } else {
                     Diag.warn("Update", "background pre-download failed: ${ApkInstaller.lastError}")
@@ -202,6 +253,7 @@ internal object UpdateDownload {
                 Diag.warn("Update", "background pre-download error: ${e.javaClass.simpleName} ${e.message}")
                 resetInstallState()
             }
+            if (ready) notifyApkReady(targetInfo)
         }.apply { isDaemon = true }.start()
     }
 

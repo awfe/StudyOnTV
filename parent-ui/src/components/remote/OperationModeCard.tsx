@@ -35,7 +35,7 @@ export default function OperationModeCard({
           )}
         </div>
         <CardDescription className="text-xs">
-          无需繁琐系统权限也能直接当成 Anki / 多邻国式智能错题本与背诵提分工具使用，随时一键切换。
+          随时一键切换：只当背题刷题工具，或者先答题再看电视。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -53,7 +53,7 @@ export default function OperationModeCard({
             }`}
           >
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="text-sm font-semibold">📚 纯粹学习提分模式</span>
+              <span className="text-sm font-semibold">📚 只学习，不锁屏</span>
               {!supervisionEnabled && (
                 <Badge variant="default" className="h-5 px-1.5 text-[11px]">
                   <Check className="me-0.5 size-3" />
@@ -62,7 +62,7 @@ export default function OperationModeCard({
               )}
             </div>
             <span className="text-xs leading-5 text-muted-foreground">
-              免锁屏、免复杂权限，打开即是闪卡背诵、错题先背再测与艾宾浩斯复习中心
+              不限制看电视，孩子随时打开刷题、背诵和复习错题
             </span>
           </button>
           <button
@@ -78,7 +78,7 @@ export default function OperationModeCard({
             }`}
           >
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="text-sm font-semibold">⏳ 先学再看管控模式</span>
+              <span className="text-sm font-semibold">⏳ 先答题，再看电视</span>
               {supervisionEnabled && (
                 <Badge variant="default" className="h-5 px-1.5 text-[11px]">
                   <Check className="me-0.5 size-3" />
@@ -87,7 +87,7 @@ export default function OperationModeCard({
               )}
             </div>
             <span className="text-xs leading-5 text-muted-foreground">
-              答题达标赢取屏幕使用时间，到点自动提醒休息与学习
+              答对题赚取观看时间，到点自动弹题并限制每日时长
             </span>
           </button>
         </div>
@@ -139,9 +139,9 @@ export default function OperationModeCard({
                 className="flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-card px-3 py-2.5 text-left text-xs transition-colors hover:bg-accent"
               >
                 <div>
-                  <div className="font-medium">2. 开启先背再测 / 间隔重复</div>
+                  <div className="font-medium">2. 开启先背再测与自动复习</div>
                   <div className="mt-0.5 text-[11px] text-muted-foreground">
-                    {quickStudy ? '已开启记忆提分策略 ✓' : '点击一键开启科学背题'}
+                    {quickStudy ? '已开启 ✓' : '点击一键开启'}
                   </div>
                 </div>
                 <Repeat2 className="size-4 shrink-0 text-primary" />

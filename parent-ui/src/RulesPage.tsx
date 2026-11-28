@@ -174,7 +174,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
               }`}
             >
               <div className="flex w-full items-center justify-between gap-2">
-                <span className="text-sm font-semibold">📚 纯粹学习提分模式</span>
+                <span className="text-sm font-semibold">📚 只学习，不锁屏</span>
                 {!supervisionEnabled && (
                   <Badge variant="default" className="h-5 px-1.5 text-[11px]">
                     <Check className="me-0.5 size-3" />
@@ -183,7 +183,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                 )}
               </div>
               <span className="text-xs leading-5 text-muted-foreground">
-                免锁屏、免复杂权限，随时刷题背诵、错题先背再测与艾宾浩斯复习
+                不限制看电视，孩子随时打开刷题、背诵和复习错题
               </span>
             </button>
             <button
@@ -196,7 +196,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
               }`}
             >
               <div className="flex w-full items-center justify-between gap-2">
-                <span className="text-sm font-semibold">⏳ 先学再看管控模式</span>
+                <span className="text-sm font-semibold">⏳ 先答题，再看电视</span>
                 {supervisionEnabled && (
                   <Badge variant="default" className="h-5 px-1.5 text-[11px]">
                     <Check className="me-0.5 size-3" />
@@ -205,7 +205,7 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
                 )}
               </div>
               <span className="text-xs leading-5 text-muted-foreground">
-                答题达标赢取屏幕使用时间，自动管理每日时长与可用时段
+                答对题赚取观看时间，到点自动弹题并限制每日时长
               </span>
             </button>
           </div>
@@ -216,10 +216,10 @@ export default function RulesPage({ state, sessionId }: { state: any; sessionId:
         <TabsList className="flex w-full max-w-full flex-nowrap justify-start gap-1 overflow-x-auto sm:justify-center">
           {(
             [
-              ['task', '任务与背诵'],
-              ['scope', '答题范围'],
-              ['more', '记忆与加练'],
-              ['time', supervisionEnabled ? '时间计划' : '时间管控（未启用）'],
+              ['task', '答题与奖励'],
+              ['scope', '出题范围与顺序'],
+              ['more', '复习与加练'],
+              ['time', supervisionEnabled ? '时间与防护' : '时间管控（未启用）'],
             ] as const
           ).map(([id, label]) => (
             <TabsTrigger

@@ -142,7 +142,7 @@ export default function DeviceStatusItems({ sessionId, deviceData, onOpenKeepAli
         </div>
       </SettingItem>
       {deviceData?.monitor && (
-        <SettingItem title="管控能力" description={monitorNote(deviceData.monitor)} wideControl>
+        <SettingItem title="权限状态" description={monitorNote(deviceData.monitor)} wideControl>
           <div className="flex flex-wrap gap-1.5 sm:justify-end">
             {[
               ['服务', deviceData.monitor.service],
@@ -175,8 +175,8 @@ export default function DeviceStatusItems({ sessionId, deviceData, onOpenKeepAli
         title="防卸载"
         description={
           deviceData?.deviceOwner
-            ? '由设备所有者权限持续执行系统级卸载限制。'
-            : '设备管理员防桌面直删；配合无障碍权限与「不允许进系统设置与应用管理」可同时拦截从设置卸载。'
+            ? '已开启系统级防卸载保护。'
+            : '防从桌面直接卸载；配合无障碍和「防孩子进系统设置」可同时防止从设置卸载。'
         }
       >
         {deviceData?.uninstallProtected ? (

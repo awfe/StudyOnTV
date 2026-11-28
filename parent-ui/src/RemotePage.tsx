@@ -82,8 +82,8 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
       if ('supervisionEnabled' in patch) {
         toast.success(
           patch.supervisionEnabled
-            ? '已切换为「先学再看管控模式」'
-            : '已切换为「纯粹学习提分模式」，免锁屏随时刷题背诵',
+            ? '已切换为「先答题，再看电视」'
+            : '已切换为「只学习，不锁屏」',
         );
       } else {
         toast.success('学习配置已更新');
@@ -113,7 +113,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
   const mode = override?.mode as 'unlock' | 'lock' | 'indefinite' | undefined;
   const untilShutdown = mode === 'unlock' && override?.untilShutdown === true;
   const title = !supervisionEnabled
-    ? '纯粹学习模式 · 不锁屏'
+    ? '只学习，不锁屏'
     : mode === 'indefinite'
       ? '管控已关闭（无限时）'
       : mode === 'unlock'
@@ -214,7 +214,7 @@ export default function RemotePage({ state, sessionId }: { state: any; sessionId
                   <DialogHeader>
                     <DialogTitle>确认关闭管控？</DialogTitle>
                     <DialogDescription>
-                      关闭后孩子可以无限使用，直到您手动恢复学习规则。如果只想当刷题背诵软件用，建议直接切换上方的「纯粹学习提分模式」。
+                      关闭后孩子可以无限使用，直到您手动恢复。如果只想当刷题背诵软件用，建议直接切换上方的「只学习，不锁屏」。
                     </DialogDescription>
                   </DialogHeader>
                   <DialogFooter>

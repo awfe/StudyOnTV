@@ -97,7 +97,7 @@
     if ($('hubSubtitle')) {
       var ov2 = state.learning && state.learning.override;
       $('hubSubtitle').textContent = app.isPureStudyMode()
-        ? '先背再测、间隔重复与错题清零，每天进步一点点'
+        ? '先背再测、定时复习与错题清零，每天进步一点点'
         : (ov2 && ov2.mode === 'unlock'
           ? app.unlockExpiry(ov2) + '，随时挑个模式巩固知识'
           : (app.scheduleText() ? app.scheduleText() + ' 为学习时段，现在可自由练习或返回桌面' : '随时开始背诵与刷题，也可以返回桌面'));

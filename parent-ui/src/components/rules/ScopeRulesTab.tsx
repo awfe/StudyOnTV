@@ -7,7 +7,13 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldSet, FieldTitle } from '@/components/ui/field';
 import { Switch } from '@/components/ui/switch';
 import type { Rules } from '@/schema';
-import { FIELD_GROUP_CLASS, Panel } from './RulePrimitives';
+import { Choice, FIELD_GROUP_CLASS, Panel } from './RulePrimitives';
+import {
+  QUESTION_ORDER_OPTIONS,
+  questionOrderPatch,
+  resolveQuestionOrderMode,
+  type QuestionOrderMode,
+} from './question-order';
 
 type Props = {
   c: Rules;
@@ -42,10 +48,21 @@ export default function ScopeRulesTab({
   const gradeSubjectEntries = Object.entries(gradeSubjects);
   const allScopeLevels = Array.from(new Set([...scopeLevels, ...Object.keys(gradeSubjects)]));
   const gradeSubjectSummary = gradeSubjectEntries.length
-    ? `已配置 ${gradeSubjectEntries.length} 个年级：${gradeSubjectEntries
-        .map(([g, subs]) => `${g}(${subs.length ? subs.join('、') : '全部科目'})`)
+    ? `已设置 ${gradeSubjectEntries.length} 个年级：${gradeSubjectEntries
+        .map(([g, subs]) => `${g}（${subs.length ? subs.join('、') : '全部科目'}）`)
         .join('、')}`
-    : '暂未勾选年级；请勾选下方年级，或点击「从当前年级×科目一键导入」';
+    : '请勾选下方年级，或点右侧按钮把上面的年级和科目复制进来';
+
+  const orderMode = resolveQuestionOrderMode(c);
+  const currentOrderInfo =
+    QUESTION_ORDER_OPTIONS.find(item => item.value === orderMode) || QUESTION_ORDER_OPTIONS[0];
+
+  const applyOrderMode = (mode: QuestionOrderMode) => {
+    const patch = questionOrderPatch(mode);
+    change('wrongFirst', patch.wrongFirst);
+    change('newFirst', patch.newFirst);
+    change('coverageFirst', patch.coverageFirst);
+  };
 
   const toggleGradeInMap = (level: string) => {
     const next = { ...gradeSubjects };
@@ -78,22 +95,37 @@ export default function ScopeRulesTab({
   };
 
   return (
-    <Panel title="答题范围" icon={BookOpen} description="不选即全部题目" status={statusNode}>
+    <Panel title="出题范围与顺序" icon={BookOpen} description="都不勾选时默认从全部题目里出题" status={statusNode}>
       <FieldSet className="gap-0">
         <FieldGroup className={FIELD_GROUP_CLASS}>
           <Field orientation="responsive" className="py-3.5">
             <FieldContent>
-              <FieldTitle>孩子选择年级</FieldTitle>
+              <FieldTitle>出题顺序</FieldTitle>
               <FieldDescription className="text-xs leading-5">
-                从允许且有题目的年级中选择；进行中不能切换
+                {currentOrderInfo.preview}
+                {c.spacedRepetitionEnabled ? '（已开启「到点自动复习」：到复习时间的旧题会优先穿插进来）' : ''}
+              </FieldDescription>
+            </FieldContent>
+            <Choice
+              label="出题顺序"
+              value={orderMode}
+              onChange={v => applyOrderMode(v as QuestionOrderMode)}
+              options={QUESTION_ORDER_OPTIONS.map(item => [item.value, item.label])}
+            />
+          </Field>
+          <Field orientation="responsive" className="py-3.5">
+            <FieldContent>
+              <FieldTitle>允许孩子自己选年级</FieldTitle>
+              <FieldDescription className="text-xs leading-5">
+                答题开始前可从允许的年级里自选，答题中途不能切换
               </FieldDescription>
             </FieldContent>
             {toggle('childSelectLevel')}
           </Field>
           <Field orientation="responsive" className="py-3.5">
             <FieldContent>
-              <FieldTitle>题库</FieldTitle>
-              <FieldDescription className="text-xs leading-5">只从选中的题库抽题</FieldDescription>
+              <FieldTitle>选择题库</FieldTitle>
+              <FieldDescription className="text-xs leading-5">只从勾选的题库里抽题，不选表示全部</FieldDescription>
             </FieldContent>
             <div className="flex min-w-0 flex-wrap gap-2">
               {scopeBanks.length ? (
@@ -113,13 +145,13 @@ export default function ScopeRulesTab({
           </Field>
           <Field orientation="responsive" className="py-3.5">
             <FieldContent>
-              <FieldTitle>按年级分别设置科目（主从组合）</FieldTitle>
+              <FieldTitle>不同年级练不同科目</FieldTitle>
               <FieldDescription className="text-xs leading-5">
-                开启后可为不同年级指定不同科目（例如：三年级只练英语，四年级练语文/数学/英语）；关闭则恢复扁平多选
+                例如：三年级只练英语，四年级练语数英；关闭则所有年级共用同一组科目
               </FieldDescription>
             </FieldContent>
             <Switch
-              aria-label="按年级分别设置科目"
+              aria-label="不同年级练不同科目"
               className="w-8! shrink-0"
               checked={gradeSubjectMode}
               onCheckedChange={checked => {
@@ -143,7 +175,7 @@ export default function ScopeRulesTab({
                       className="h-7 px-2 text-xs"
                       onClick={importFromFlatScope}
                     >
-                      从当前年级×科目一键导入
+                      复制上面的年级和科目
                     </Button>
                   )}
                 </div>
@@ -258,33 +290,6 @@ export default function ScopeRulesTab({
               </Field>
             </>
           )}
-          <Field orientation="responsive" className="py-3.5">
-            <FieldContent>
-              <FieldTitle>没做过的题先出</FieldTitle>
-              <FieldDescription className="text-xs leading-5">
-                孩子一次都没见过的题排在前面；见过的题按正常顺序。和下面「答错的题先出」同时打开时，答错的题仍然最前。
-              </FieldDescription>
-            </FieldContent>
-            {toggle('newFirst')}
-          </Field>
-          <Field orientation="responsive" className="py-3.5">
-            <FieldContent>
-              <FieldTitle>答错的题先出</FieldTitle>
-              <FieldDescription className="text-xs leading-5">
-                答错的题下一轮先回来重练，答对一次后恢复正常顺序
-              </FieldDescription>
-            </FieldContent>
-            {toggle('wrongFirst')}
-          </Field>
-          <Field orientation="responsive" className="py-3.5">
-            <FieldContent>
-              <FieldTitle>没答对的题先出</FieldTitle>
-              <FieldDescription className="text-xs leading-5">
-                还没答对过的题排在前面，保证整本题库都能过一遍
-              </FieldDescription>
-            </FieldContent>
-            {toggle('coverageFirst')}
-          </Field>
         </FieldGroup>
       </FieldSet>
     </Panel>

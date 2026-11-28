@@ -44,6 +44,7 @@ object Updater {
         val cachedAt = Prefs.updateCheckedAt(ctx)
         val cached = cachedInfo(ctx)
         if (!forceRefresh && cached != null && System.currentTimeMillis() - cachedAt < CACHE_MS) {
+            preDownloadIfNeeded(ctx, cached)
             onResult(cached)
             return
         }
@@ -113,6 +114,12 @@ object Updater {
         UpdateDownload.resolveAutoDownloadSetting(requested, localOnly)
     internal fun shouldPreDownload(localOnly: Boolean, autoDownload: Boolean, newerInfo: Info?, apkReady: Boolean): Boolean =
         UpdateDownload.shouldPreDownload(localOnly, autoDownload, newerInfo, apkReady)
+    internal fun shouldPromptOnDevice(autoDownload: Boolean, apkReady: Boolean, force: Boolean): Boolean =
+        UpdateDownload.shouldPromptOnDevice(autoDownload, apkReady, force)
+    internal fun canRetryPreDownload(lastAttemptMs: Long, lastVersion: String, targetVersion: String, nowMs: Long): Boolean =
+        UpdateDownload.canRetryPreDownload(lastAttemptMs, lastVersion, targetVersion, nowMs)
+    fun addApkReadyListener(listener: (Info) -> Unit) = UpdateDownload.addApkReadyListener(listener)
+    fun removeApkReadyListener(listener: (Info) -> Unit) = UpdateDownload.removeApkReadyListener(listener)
 
     internal fun currentInstallSnapshot(nowMs: Long = System.currentTimeMillis()): InstallSnapshot =
         UpdateDownload.currentInstallSnapshot(nowMs)
@@ -143,7 +150,8 @@ object Updater {
         nowMs: Long = System.currentTimeMillis(),
         message: String = "正在准备下载 v$version…"
     ): Boolean = UpdateDownload.tryBeginInstall(version, nowMs, message)
-    fun preDownloadIfNeeded(ctx: Context, info: Info?) = UpdateDownload.preDownloadIfNeeded(ctx, info)
+    fun preDownloadIfNeeded(ctx: Context, info: Info?, forceRetry: Boolean = false) =
+        UpdateDownload.preDownloadIfNeeded(ctx, info, forceRetry)
     internal fun appendInstallStatus(target: JSONObject, snap: InstallSnapshot = currentInstallSnapshot()): JSONObject =
         UpdateDownload.appendInstallStatus(target, snap)
     fun startRemoteInstall(ctx: Context): Pair<Int, JSONObject> = UpdateDownload.startRemoteInstall(ctx)
@@ -167,6 +175,7 @@ object Updater {
             Prefs.setUpdateLog(ctx, JSONObject().put("at", System.currentTimeMillis()).put("items", log).toString())
             return null to log
         }
+        UpdateDownload.cleanupObsoleteApk(ctx)
         val current = currentVersion(ctx)
         val started = System.currentTimeMillis()
         var info: Info? = null
@@ -306,7 +315,7 @@ object Updater {
             val effective = resolveAutoDownloadSetting(input.optBoolean("autoDownload", false), LocalOnlyGuard.enabled)
             Prefs.setAutoDownloadUpdate(ctx, effective)
             if (effective) {
-                preDownloadIfNeeded(ctx, cachedInfo(ctx))
+                preDownloadIfNeeded(ctx, cachedInfo(ctx), forceRetry = true)
             }
         }
         if (input.has("api") || input.has("mirrors")) {

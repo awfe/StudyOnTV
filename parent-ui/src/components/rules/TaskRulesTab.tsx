@@ -44,9 +44,9 @@ export default function TaskRulesTab({
     <FieldGroup className={FIELD_GROUP_CLASS}>
       <Field orientation="responsive" className="py-3.5">
         <FieldContent>
-          <FieldTitle>按题目星级奖励</FieldTitle>
+          <FieldTitle>按题目难度给不同奖励</FieldTitle>
           <FieldDescription className="text-xs leading-5">
-            关闭时：通过一组固定解锁 N 分钟；开启时：按题目难度星级分别设置奖励时长
+            关闭时：每次过关固定奖励 N 分钟；开启时：1–5 星题目每答对一题按星级奖励不同分钟
           </FieldDescription>
         </FieldContent>
         {toggle('difficultyRewardEnabled')}
@@ -72,7 +72,8 @@ export default function TaskRulesTab({
       ) : (
         <Field orientation="responsive" className="py-3.5">
           <FieldContent>
-            <FieldTitle>通过一组解锁（分钟）</FieldTitle>
+            <FieldTitle>过关奖励时长（分钟）</FieldTitle>
+            <FieldDescription className="text-xs leading-5">每次答题过关后可看电视或玩平板多久</FieldDescription>
           </FieldContent>
           {number('sessionMinutes', 1, 120)}
         </Field>
@@ -80,8 +81,8 @@ export default function TaskRulesTab({
 
       <Field orientation="responsive" className="py-3.5">
         <FieldContent>
-          <FieldTitle>每日使用上限（分钟）</FieldTitle>
-          <FieldDescription className="text-xs leading-5">超出后当天锁死；0 点重置</FieldDescription>
+          <FieldTitle>每天最多看多久（分钟）</FieldTitle>
+          <FieldDescription className="text-xs leading-5">用完后今天不再解锁，凌晨 0 点重置</FieldDescription>
         </FieldContent>
         <div className="flex items-center gap-3">
           {toggle('dailyLimitEnabled')}
@@ -91,8 +92,8 @@ export default function TaskRulesTab({
 
       <Field orientation="responsive" className="py-3.5">
         <FieldContent>
-          <FieldTitle>每天最多解锁（组）</FieldTitle>
-          <FieldDescription className="text-xs leading-5">答完上限即锁定</FieldDescription>
+          <FieldTitle>每天最多过关（次）</FieldTitle>
+          <FieldDescription className="text-xs leading-5">达到上限后今天不再解锁</FieldDescription>
         </FieldContent>
         <div className="flex items-center gap-3">
           {toggle('roundsLimitEnabled')}
@@ -103,14 +104,20 @@ export default function TaskRulesTab({
   );
 
   return (
-    <Panel title="学习任务与背诵策略" icon={Sparkles} status={statusNode}>
+    <Panel title="答题与奖励" icon={Sparkles} status={statusNode}>
       <FieldSet className="gap-0">
         <FieldGroup className={FIELD_GROUP_CLASS}>
           <Field orientation="responsive" className="py-3.5">
             <FieldContent>
-              <FieldTitle>玩法</FieldTitle>
+              <FieldTitle>过关方式</FieldTitle>
               <FieldDescription className="text-xs leading-5">
-                按组闯关：答完一组结算；连续答对：连对 N 题达标；自由练习：不计解锁，随时刷题；答对指定题数：累计答对 N 题达标
+                {c.playMode === 'streak'
+                  ? '中途答错会重新计数，连续答对够数才过关'
+                  : c.playMode === 'count'
+                    ? '累计答对够数就过关，答错不重新计数'
+                    : c.playMode === 'practice'
+                      ? '只刷题不计分，也不发解锁时间'
+                      : '做完一整组且正确率达标即可过关'}
               </FieldDescription>
             </FieldContent>
             <Controller
@@ -120,12 +127,12 @@ export default function TaskRulesTab({
                 <Choice
                   value={field.value}
                   onChange={field.onChange}
-                  label="玩法"
+                  label="过关方式"
                   options={[
-                    ['round', '按组闯关'],
-                    ['streak', '连续答对'],
-                    ['practice', '自由练习'],
-                    ['count', '答对指定题数'],
+                    ['round', '答完一组达标'],
+                    ['streak', '连续答对 N 题'],
+                    ['count', '累计答对 N 题'],
+                    ['practice', '自由刷题（不计分）'],
                   ]}
                 />
               )}
@@ -149,7 +156,7 @@ export default function TaskRulesTab({
             <FieldContent>
               <FieldTitle>先背再测</FieldTitle>
               <FieldDescription className="text-xs leading-5">
-                做题前先展示答案与解析卡片背诵一遍，再打乱测验，适合生词、古诗文与新题入门
+                做题前先把题目和答案看一遍记住，再打乱顺序考一遍，适合生词、古诗文和新知识
               </FieldDescription>
             </FieldContent>
             {toggle('memorizeFirst')}
@@ -166,7 +173,7 @@ export default function TaskRulesTab({
             className="group flex items-center gap-1.5 py-3.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
             <ChevronDown className="size-3 transition-transform group-data-[state=open]:rotate-180" />
-            屏幕时长与奖励规则（切换到「先学再看管控模式」后生效）
+            时长与奖励规则（切换到「先答题，再看电视」后生效）
           </CollapsibleTrigger>
           <CollapsibleContent>{rewardAndQuotaFields}</CollapsibleContent>
         </Collapsible>
@@ -241,17 +248,17 @@ export default function TaskRulesTab({
                 <>
                   <Field orientation="responsive" className="py-3.5">
                     <FieldContent>
-                      <FieldTitle>每日免费时长（分钟）</FieldTitle>
-                      <FieldDescription className="text-xs leading-5">到期前无需答题；0 为关闭</FieldDescription>
+                      <FieldTitle>每天免费看多久（分钟）</FieldTitle>
+                      <FieldDescription className="text-xs leading-5">每天先免费看几分钟，用完再开始答题；0 为不送</FieldDescription>
                     </FieldContent>
                     {number('dailyFreeMinutes', 0, 120)}
                   </Field>
 
                   <Field orientation="responsive" className="py-3.5">
                     <FieldContent>
-                      <FieldTitle>每次开机免费（分钟）</FieldTitle>
+                      <FieldTitle>每次开机免费看多久（分钟）</FieldTitle>
                       <FieldDescription className="text-xs leading-5">
-                        真实开机或唤醒时发放，重开应用不重复；0 为关闭
+                        开机或唤醒时送几分钟，防止刚开电视就锁屏；0 为不送
                       </FieldDescription>
                     </FieldContent>
                     {number('bootFreeMinutes', 0, 120)}
@@ -262,9 +269,9 @@ export default function TaskRulesTab({
               {c.bootFreeMinutes > 0 && (
                 <Field orientation="responsive" className="py-3.5">
                   <FieldContent>
-                    <FieldTitle>开机间隔（分钟）</FieldTitle>
+                    <FieldTitle>开机免费冷却时间（分钟）</FieldTitle>
                     <FieldDescription className="text-xs leading-5">
-                      开机或唤醒时，距上次发放至少这么久才会再次发放；0 为不限
+                      两次领开机免费时长至少隔多久，防止反复开关机白看；0 为不限
                     </FieldDescription>
                   </FieldContent>
                   {number('bootFreeIntervalMinutes', 0, 1440)}
@@ -274,7 +281,7 @@ export default function TaskRulesTab({
               {c.playMode === 'round' && (
                 <Field orientation="responsive" className="py-3.5">
                   <FieldContent>
-                    <FieldTitle>通过正确率（%）</FieldTitle>
+                    <FieldTitle>过关所需正确率（%）</FieldTitle>
                   </FieldContent>
                   <Controller
                     name="passRatio"
@@ -285,7 +292,7 @@ export default function TaskRulesTab({
                         type="number"
                         min={1}
                         max={100}
-                        aria-label="通过正确率"
+                        aria-label="过关所需正确率"
                         value={Number.isFinite(field.value) ? Math.round(Number(field.value) * 100) : ''}
                         onChange={e =>
                           field.onChange(e.target.value === '' ? NaN : Number(e.target.value) / 100)
@@ -298,16 +305,16 @@ export default function TaskRulesTab({
 
               <Field orientation="responsive" className="py-3.5">
                 <FieldContent>
-                  <FieldTitle>答错后强制查看解析（秒）</FieldTitle>
-                  <FieldDescription className="text-xs leading-5">0 为不强制；期间不能提前进入下一题</FieldDescription>
+                  <FieldTitle>答错后停顿看解析（秒）</FieldTitle>
+                  <FieldDescription className="text-xs leading-5">答错后停住几秒让孩子看清解析，防止乱点跳过；0 为不停留</FieldDescription>
                 </FieldContent>
                 {number('wrongReviewSeconds', 0, 300)}
               </Field>
 
               <Field orientation="responsive" className="py-3.5">
                 <FieldContent>
-                  <FieldTitle>随机打乱选项</FieldTitle>
-                  <FieldDescription className="text-xs leading-5">打乱单选、多选选项；判断题不变</FieldDescription>
+                  <FieldTitle>打乱选项顺序</FieldTitle>
+                  <FieldDescription className="text-xs leading-5">把 A/B/C/D 选项打乱，防止孩子死记选项位置</FieldDescription>
                 </FieldContent>
                 {toggle('shuffleOptions')}
               </Field>

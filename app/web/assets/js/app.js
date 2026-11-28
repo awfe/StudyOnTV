@@ -186,7 +186,8 @@
     if (!info || !info.latest) return;
     window.currentUpdate = info;
     try { if (!info.force && window.localStorage.setItem && window.localStorage.getItem('sotv_update_dismissed') === info.latest) return; } catch (e) {}
-    $('updateText').textContent = '发现新版本 v' + info.latest;
+    $('updateText').textContent = info.apkReady ? ('新版本 v' + info.latest + ' 已下载好') : ('发现新版本 v' + info.latest);
+    if ($('updateGo')) $('updateGo').textContent = info.apkReady ? '立即安装' : '更新';
     $('updateTip').className = 'update-tip show';
   };
   // 朗读失败（没有系统语音、云端 Key 不对、语言不支持…）直接显示在电视上，不能再「点了没声音」

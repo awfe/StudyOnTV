@@ -138,20 +138,20 @@ export default function DeviceControlCard({
           <span>{config?.questionsPerRound || 0} 题</span>
         </div>
         <div className="flex items-center justify-between gap-4">
-          <span className="text-muted-foreground">{supervisionEnabled ? '通过一组解锁' : '复习范围'}</span>
+          <span className="text-muted-foreground">{supervisionEnabled ? '过关奖励' : '自动复习范围'}</span>
           <span>
             {!supervisionEnabled
               ? config?.spacedScope === 'wrong_only'
-                ? '只背错题'
-                : '全部启用题目'
+                ? '只复习错题'
+                : '全部题目'
               : config?.difficultyRewardEnabled
-                ? '按星级奖励'
+                ? '按难度奖励'
                 : `${config?.sessionMinutes || 0} 分钟`}
           </span>
         </div>
         <div className="flex items-center justify-between gap-2 pt-1">
           <span className="text-muted-foreground">
-            加练池：<strong className="font-medium text-foreground tabular-nums">{learning.extraPool || 0}</strong> 题
+            待加练：<strong className="font-medium text-foreground tabular-nums">{learning.extraPool || 0}</strong> 题
           </span>
           <ClearExtraPoolButton
             sessionId={sessionId}

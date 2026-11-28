@@ -138,6 +138,7 @@ internal fun GateService.checkForegroundImpl() {
     if (now - lastTelemetryCheckAt >= 1_800_000L) {
         lastTelemetryCheckAt = now
         Diag.uploadRuntimeLogsIfDue(this)
+        Updater.check(this) { }
     }
     val state = GateTickState(now, free, awake, screenOn, monitoring, canOverlay, ownForeground, pkg,
         gateExpectedNow, gateReason, settingsBlocked, active, protecting)

@@ -66,7 +66,13 @@ export default function DeviceUpdateSection({
     if (polling && update.data && !update.data.checking) {
       setPolling(false);
       if (update.data.hasUpdate && update.data.latest) {
-        toast.message(`发现新版本 v${update.data.latest}，请升级`);
+        toast.message(
+          update.data.apkReady
+            ? `新版本 v${update.data.latest} 已下载好，可直接安装`
+            : update.data.autoDownload && update.data.installState === 'downloading'
+              ? `发现新版本 v${update.data.latest}，正在后台自动下载，下好后再提醒`
+              : `发现新版本 v${update.data.latest}，请升级`,
+        );
       } else if (
         update.data.log &&
         update.data.log.length &&
@@ -125,7 +131,7 @@ export default function DeviceUpdateSection({
       client.invalidateQueries({ queryKey: ['update', sessionId] });
       const enabled =
         typeof result?.autoDownload === 'boolean' ? result.autoDownload : variables.autoDownload;
-      toast.success(enabled ? '已开启自动后台下载更新包' : '已关闭自动后台下载更新包');
+      toast.success(enabled ? '已开启后台自动下载安装包' : '已关闭后台自动下载安装包');
     },
     onError: (error: any) => toast.error(error?.message || '保存更新设置失败'),
   });
@@ -223,11 +229,11 @@ export default function DeviceUpdateSection({
             </div>
           </SettingItem>
           <SettingItem
-            title="自动后台下载更新包"
-            description="检测到新版本时自动在后台预下载并校验安装包，点击更新即可快速安装。"
+            title="后台自动下载安装包"
+            description="检测到新版本时先在后台静默下载并校验，下载完成后再弹更新提示，点安装无需等待。"
           >
             <Switch
-              aria-label="自动后台下载更新包"
+              aria-label="后台自动下载安装包"
               checked={!!updateInfo?.autoDownload}
               disabled={updateSettings.isPending || !updateInfo}
               onCheckedChange={autoDownload => updateSettings.mutate({ autoDownload })}

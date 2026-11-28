@@ -29,10 +29,10 @@ export default function LearningDiagnosisSection({
         <CardHeader className="border-b border-border/70 px-4 py-3 sm:px-5">
           <CardTitle className="flex items-center gap-2 text-sm">
             <Brain className="size-4 text-muted-foreground" />
-            Anki 记忆成熟度分布
+            题目掌握进度分布
           </CardTitle>
           <CardDescription className="col-span-full text-xs">
-            按艾宾浩斯复习间隔划分：未接触 → 初学（间隔 &lt; 1天）→ 巩固中（1–20天）→ 已熟记（≥ 21天）
+            按复习掌握程度划分：未接触 → 初学（1 天内再复习）→ 巩固中（1–20 天后再复习）→ 已熟记（21 天以上）
           </CardDescription>
           <CardAction>
             <Badge variant="outline" className="font-normal tabular-nums">

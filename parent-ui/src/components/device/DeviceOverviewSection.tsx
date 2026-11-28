@@ -135,7 +135,7 @@ export default function DeviceOverviewSection({ sessionId, deviceData, onOpenKee
           <details className="group py-2">
             <summary className="flex cursor-pointer list-none items-center gap-1.5 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
               <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
-              高级自定义上报地址
+              自定义日志服务器（开发者用）
             </summary>
             <div className="divide-y divide-border/60">
               <SettingItem
