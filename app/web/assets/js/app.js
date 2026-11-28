@@ -23,11 +23,12 @@
   // 断电 / 被系统清后台后恢复当前这组题。用 localStorage 而不是 sessionStorage：
   // 进程被杀后 WebView 是新的会话，sessionStorage 活不下来。
   var ROUND_KEY = 'sotv_round';
-  function saveRound() {
-    if (!state.round || state.round.studyPhase === 'memorize') return clearRound();
+  function saveRound(targetRound) {
+    var r = targetRound || state.round;
+    if (!r || r.studyPhase === 'memorize') return clearRound();
     try {
       window.localStorage.setItem(ROUND_KEY, JSON.stringify({
-        round: state.round, quizGeneration: state.learning.quizGeneration || 0
+        round: r, quizGeneration: state.learning.quizGeneration || 0
       }));
     } catch (e) {}
   }
@@ -35,9 +36,11 @@
   function savedRound() {
     try {
       var saved = JSON.parse(window.localStorage.getItem(ROUND_KEY) || 'null');
-      // nonce 和 quizGeneration 都对得上，说明服务端还停在这一题，恢复才不会答到已经换掉的题
+      // nonce、roundId 与 quizGeneration 全部和服务端对得上才恢复，防止恢复已答完的旧 nonce 导致死循环
       if (saved && saved.round && saved.round.nonce && saved.round.question &&
-          saved.quizGeneration === (state.learning.quizGeneration || 0)) return saved.round;
+          saved.quizGeneration === (state.learning.quizGeneration || 0) &&
+          (!state.learning.activeNonce || saved.round.nonce === state.learning.activeNonce) &&
+          (!state.learning.activeRoundId || saved.round.id === state.learning.activeRoundId)) return saved.round;
     } catch (e) {}
     return null;
   }
@@ -945,7 +948,19 @@
     if (written ? (!written.value.trim() && !state.draft.drawing) : !state.selected.length) { toast('请先填写或选择答案'); return; }
     state.busy = true;
     request('/api/quiz/answer', { roundId: round.id, nonce: round.nonce, selections: state.selected, text: written ? written.value : '', drawing: state.draft ? state.draft.drawing : '' }, function (error, result) {
-      if (error) { state.busy = false; toast(error); return; }
+      if (error) {
+        state.busy = false;
+        if (String(error).indexOf('题目已更新') >= 0 || String(error).indexOf('round_missing') >= 0) {
+          clearRound();
+          state.round = null;
+          hideFeedback();
+          toast('题目已更新，正在加载最新题目');
+          start(state.lastStartOpts);
+          return;
+        }
+        toast(error);
+        return;
+      }
       if (result.pending) { state.busy = false; pending(result.reviewId); return; }
       if (result.blocked) { state.busy = false; lock(result.blocked); return; }
       // 家长刚删掉这道题时后端返回可恢复结果：重新取题，不要停在旧题上
@@ -957,6 +972,9 @@
       if (!result.correctIndices) { state.busy = false; hideFeedback(); start(state.lastStartOpts); return; }
       state.learning = result.status || state.learning;
       if (result.study) state.study = result.study;
+      // 服务端已切到下一题或结清本轮：立即同步本地缓存，避免反馈页期间页面重建恢复出旧 nonce
+      if (result.finished) clearRound();
+      else if (result.next && result.next.nonce) saveRound(result.next);
       pill();
       all('#qOptions [data-opt]').forEach(function (el) {
         var i = +el.getAttribute('data-opt');

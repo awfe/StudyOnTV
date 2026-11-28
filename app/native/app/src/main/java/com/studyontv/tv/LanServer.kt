@@ -384,7 +384,11 @@ class LanServer(
             ) {
                 return
             }
-            Diag.error("HTTP", "$method $path failed", e)
+            if (e is IllegalArgumentException) {
+                Diag.warn("HTTP", "$method $path rejected: ${msg.take(160)}")
+            } else {
+                Diag.error("HTTP", "$method $path failed", e)
+            }
             return json(out, 400, JSONObject().put("error", "bad_request").put("message", e.message ?: "请求格式错误"), origin)
         }
 

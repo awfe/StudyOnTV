@@ -135,12 +135,21 @@ class ParentActivity : Activity() {
         // 权限设置 / 修改密码 / 返回答题都放在网页里，方便遥控器在同一个页面里移动焦点
         currentFocus?.let { (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(it.windowToken, 0) }
         releaseWeb()
-        web = WebShell(this).create(Prefs.localBase(this) + "#/pair").also {
-            it.addJavascriptInterface(DeviceBridge(this, true, it), "SOTVNative")
+        val created = WebShell(this).createOrNull(Prefs.localBase(this) + "#/pair")
+        if (created == null) {
+            setContentView(WebShell.buildUnavailableView(
+                context = this,
+                title = "无法打开内置连接页（缺少系统 WebView）",
+                onRetry = { connection() },
+                onExit = { finish() }
+            ))
+            return
         }
+        created.addJavascriptInterface(DeviceBridge(this, true, created), "SOTVNative")
+        web = created
         showingWeb = true
-        setContentView(web)
-        web?.requestFocus()
+        setContentView(created)
+        created.requestFocus()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

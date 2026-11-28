@@ -24,7 +24,8 @@ import android.view.WindowManager
 
 class GateService : Service() {
     private val handler = Handler(Looper.getMainLooper())
-    private var lastTick = SystemClock.elapsedRealtime()
+    private var lastTickElapsed = SystemClock.elapsedRealtime()
+    private var lastTickUptime = SystemClock.uptimeMillis()
     @Volatile private var wasUsing = false
     private var lastGate = 0L
     private var lastFallbackNotify = 0L
@@ -66,6 +67,7 @@ class GateService : Service() {
     /** 遥控器电源键退出全屏学习页后的退让截止时间（elapsedRealtime），避免下一 tick 立刻重拉 */
     @Volatile private var powerExitUntil = 0L
     private var screenReceiverRegistered = false
+    private var foregroundChannelCreated = false
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -74,11 +76,23 @@ class GateService : Service() {
                     shuttingDown = false
                     powerExitUntil = 0L
                 }
-                Intent.ACTION_SCREEN_OFF -> screenOn = false
+                Intent.ACTION_SCREEN_OFF -> {
+                    screenOn = false
+                    if (wasUsing) {
+                        val (_, awakeDelta) = sampleAwakeDelta()
+                        if (awakeDelta > 5_000L) Diag.warn("Gate", "tick delayed awake=${awakeDelta}ms (screen_off)")
+                        if (awakeDelta > 0L) {
+                            try { DeviceRuntime.learning.consume(awakeDelta) } catch (_: Exception) { }
+                        }
+                        wasUsing = false
+                        beatWatch(false)
+                    }
+                }
                 Intent.ACTION_SHUTDOWN, "android.intent.action.QUICKBOOT_POWEROFF" -> {
                     shuttingDown = true
                     screenOn = false
                     wasUsing = false
+                    beatWatch(false)
                     handler.post { hideAll(); countdown.hide() }
                 }
             }
@@ -94,10 +108,19 @@ class GateService : Service() {
         }
     }
 
+    /** 计算自上次采样以来的真实清醒流逝（min(elapsed差, uptime差) 天然剔除深睡并保留 OEM 节流期间的观看时长） */
+    private fun sampleAwakeDelta(): Pair<Long, Long> {
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val nowUptime = SystemClock.uptimeMillis()
+        val deltaElapsed = (nowElapsed - lastTickElapsed).coerceAtLeast(0L)
+        val deltaUptime = (nowUptime - lastTickUptime).coerceAtLeast(0L)
+        lastTickElapsed = nowElapsed
+        lastTickUptime = nowUptime
+        return nowElapsed to minOf(deltaElapsed, deltaUptime)
+    }
+
     private fun checkForeground() {
-        val now = SystemClock.elapsedRealtime()
-        val elapsed = now - lastTick
-        lastTick = now
+        val (now, awakeDelta) = sampleAwakeDelta()
         val config = DeviceRuntime.store.config()
         if (!config.optBoolean("supervisionEnabled", true)) {
             // 纯刷题背诵模式下不拦截其他应用、不锁系统设置、不静音，也不提醒缺少悬浮窗权限
@@ -115,11 +138,14 @@ class GateService : Service() {
             trackCapability(true, now)
             return
         }
-        if (wasUsing) DeviceRuntime.learning.consume(elapsed)
+        if (wasUsing && awakeDelta > 5_000L) {
+            Diag.warn("Gate", "tick delayed awake=${awakeDelta}ms")
+        }
+        val status = if (wasUsing) DeviceRuntime.learning.consumeAndStatus(awakeDelta)
+        else DeviceRuntime.learning.status()
         val canOverlay = OverlayAccess.canDraw(this)
         updateAnchor(canOverlay && config.optBoolean("backgroundAnchorEnabled", true))
         if (!canOverlay) overlay.hide()
-        val status = DeviceRuntime.learning.status()
         val free = status.optBoolean("free")
         val unlimited = status.optJSONObject("override")?.optString("mode") == "indefinite"
         if (InputSupport.active) {
@@ -131,8 +157,11 @@ class GateService : Service() {
         }
         if (SystemSettingsGuard.active(now)) { settingsBlockedNow = false; freeNow = free; wasUsing = false; beatWatch(false); hideAll(); countdown.hide(); if (MediaPause.active) releaseMuteWithoutGate("settings"); return }
         val power = getSystemService(POWER_SERVICE) as PowerManager
+        val interactive = power.isInteractive
         val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
-        val awake = power.isInteractive && !locked && screenOn && displayOn() && !shuttingDown
+        val dispOn = displayOn()
+        val awake = screenOn && dispOn && !shuttingDown && !locked &&
+            (interactive || (DeviceBridge.isTv(this) && Playback.hasActive(this)))
         if (lastAwake != awake) { DeviceRuntime.learning.awake(awake); lastAwake = awake }
         val monitoring = canOverlay || WatchAccessibilityService.connected || Foreground.hasUsageAccess(this)
         // #17 次要项：新装机一个监控权限都没有时，不能一声不响（连续 5 分钟才提示一次）
@@ -203,7 +232,7 @@ class GateService : Service() {
         // #162：无障碍按键过滤只在学习页真的要拦 Home / 任务键时打开，平时关掉，
         // 否则海信 VIDAA 这类固件的系统音量条会从厂商面板退回 AOSP 白卡片。
         try { WatchAccessibilityService.setHomeFilter(LearningNavigation.shouldBlockHome()) } catch (_: Exception) { }
-        val snapshot = "reason=$gateReason free=$free awake=$awake screen=$screenOn monitoring=$monitoring own=$ownForeground pkg=$pkg cls=${pkg?.let { Foreground.currentClass(it) }} active=$active gate=${hasGate()} overlay=$canOverlay mute=${MediaPause.active} failures=$gateFailures"
+        val snapshot = "reason=$gateReason free=$free awake=$awake screen=$screenOn inter=$interactive lock=$locked disp=$dispOn monitoring=$monitoring own=$ownForeground pkg=$pkg cls=${pkg?.let { Foreground.currentClass(it) }} active=$active gate=${hasGate()} overlay=$canOverlay mute=${MediaPause.active} failures=$gateFailures"
         if (snapshot != lastDiag) { lastDiag = snapshot; Diag.info("Gate", snapshot) }
         if (now - lastTelemetryCheckAt >= 1_800_000L) {
             lastTelemetryCheckAt = now
@@ -691,17 +720,31 @@ class GateService : Service() {
     /** 尽早进入前台服务：Android 8+ 要求 startForegroundService 后 5 秒内必须调用 startForeground，绝不能放在数据库初始化后面（#166） */
     private fun enterForeground() {
         val channelId = "sotv_gate"
-        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel(channelId, "使用时间管理", NotificationManager.IMPORTANCE_LOW))
-        val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, channelId) else Notification.Builder(this)
-        val notification = builder.setContentTitle("题了个题 · 使用时间管理中").setContentText("点击打开学习任务")
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentIntent(pi).setOngoing(true).build()
+        if (Build.VERSION.SDK_INT >= 26 && !foregroundChannelCreated) {
+            runCatching {
+                val manager = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+                manager?.createNotificationChannel(NotificationChannel(channelId, "使用时间管理", NotificationManager.IMPORTANCE_LOW))
+                foregroundChannelCreated = true
+            }
+        }
+        val pi = runCatching {
+            PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        }.getOrNull()
+        val notification = runCatching {
+            val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, channelId) else Notification.Builder(this)
+            builder.setContentTitle("题了个题 · 使用时间管理中").setContentText("点击打开学习任务")
+                .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                .apply { if (pi != null) setContentIntent(pi) }
+                .setOngoing(true).build()
+        }.getOrElse {
+            val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, channelId) else Notification.Builder(this)
+            builder.setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setOngoing(true).build()
+        }
         try {
             if (Build.VERSION.SDK_INT >= 34) startForeground(1001, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             else startForeground(1001, notification)
         } catch (e: Exception) {
-            Diag.warn("Service", "startForeground failed: ${e.javaClass.simpleName} ${e.message ?: ""}")
+            runCatching { Diag.warn("Service", "startForeground failed: ${e.javaClass.simpleName} ${e.message ?: ""}") }
         }
     }
 
@@ -776,8 +819,8 @@ class GateService : Service() {
         }
         instance = null
         Prefs.setServiceRunning(this, false)
-        // 正常退出：清掉心跳，下次启动不会把停机期间当成观看时间补扣
-        Prefs.clearWatchBeat(this)
+        // 仅在非观看态正常退出时清掉心跳；正在观看中被系统清理时保留心跳，供重启后补算
+        if (!wasUsing) Prefs.clearWatchBeat(this)
         Diag.warn("Service", "GateService destroyed at uptime=${SystemClock.uptimeMillis() / 1000}s")
         super.onDestroy()
     }
@@ -858,7 +901,7 @@ class GateService : Service() {
                 .put("accessibilityLostCount", Prefs.accessibilityLostCount(context))
                 .put("uncleanRestarts", ProcessHealth.uncleanRestarts(context))
                 .put("gate", hasGate())
-                .put("lastTickSeconds", if (service == null) -1 else ((SystemClock.elapsedRealtime() - service.lastTick) / 1000))
+                .put("lastTickSeconds", if (service == null) -1 else ((SystemClock.elapsedRealtime() - service.lastTickElapsed) / 1000))
                 .put("lastError", service?.lastGateError ?: "")
                 // === #110 “静音了但弹不出来”的可读诊断（只新增，不删旧字段） ===
                 .put("gateExpected", gateExpected)
@@ -1123,11 +1166,22 @@ object OverlayAccess {
     /** 分类：permission / bad-token / invalid-display / illegal-argument / window / no-window-service */
     @Volatile var lastProbeErrorKind: String = ""
         private set
+    /** 最近一次已落盘的探针日志指纹：状态未变化时不重复刷屏，避免挤爆 sotv.log */
+    @Volatile private var lastLoggedProbeKey: String = ""
     /** 最近一次探针是否成功（Settings=false 但厂商实际允许时为 true） */
     val probeSucceeded: Boolean get() = probeOk && probed
 
     /** 用户从系统设置返回后调用：让下一次 canDraw() 重新做一次真实探测 */
-    fun invalidate() { probed = false }
+    fun invalidate() {
+        probed = false
+        lastLoggedProbeKey = ""
+    }
+
+    internal fun shouldLogProbeOutcome(key: String): Boolean {
+        if (key == lastLoggedProbeKey) return false
+        lastLoggedProbeKey = key
+        return true
+    }
 
     fun canDraw(context: Context): Boolean = settingsCanDraw(context) || appOpsAllows(context) || probe(context)
 
@@ -1199,7 +1253,9 @@ object OverlayAccess {
             probeOk = true
             lastProbeErrorKind = ""
             lastProbeError = ""
-            Diag.warn("Gate", "Settings.canDrawOverlays=false 但 1×1 探针 addView 成功（removed=$removed type=$name）→ 厂商 AppOps 不一致，本次会话按有权限处理")
+            if (shouldLogProbeOutcome("ok:$removed:$name")) {
+                Diag.warn("Gate", "Settings.canDrawOverlays=false 但 1×1 探针 addView 成功（removed=$removed type=$name）→ 厂商 AppOps 不一致，本次会话按有权限处理")
+            }
             true
         } catch (e: Throwable) {
             probeOk = false
@@ -1213,7 +1269,11 @@ object OverlayAccess {
     private fun record(kind: String, detail: String) {
         lastProbeErrorKind = kind
         lastProbeError = detail.ifEmpty { kind }
-        Diag.warn("Gate", "overlay probe failed kind=$kind $lastProbeError")
+        // 按异常类型与窗口类型去重（忽略 ViewRootImpl$W@xxxx 实例地址变化），状态变化时才落盘
+        val normalized = lastProbeError.replace(Regex("@[0-9a-fA-F]+"), "@_")
+        if (shouldLogProbeOutcome("fail:$kind:$normalized")) {
+            Diag.warn("Gate", "overlay probe failed kind=$kind $lastProbeError")
+        }
     }
 
     private fun classify(e: Throwable): String = when (e) {

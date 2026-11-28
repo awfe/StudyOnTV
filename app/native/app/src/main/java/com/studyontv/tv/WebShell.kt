@@ -68,6 +68,18 @@ class WebShell(private val context: Context) {
         return web
     }
 
+    /**
+     * 安全创建 WebView：部分精简 ROM 电视盒子（如 Android 6.0.1 运营商盒子）缺失系统 WebView 包，
+     * 捕获 MissingWebViewPackageException / UnsatisfiedLinkError，避免 Activity/Service 无限闪退。
+     */
+    fun createOrNull(url: String): WebView? = try {
+        create(url)
+    } catch (t: Throwable) {
+        if (!isWebViewUnavailable(t)) throw t
+        Diag.error("WebView", "系统缺少 WebView 组件，已降级原生提示", t)
+        null
+    }
+
     
     fun warmUp(url: String) {
         Thread {
@@ -148,6 +160,84 @@ class WebShell(private val context: Context) {
                 } else {
                     throw e
                 }
+            }
+        }
+
+        /** 识别「系统缺少/损坏/正在更新 WebView」异常链，用于降级纯原生提示页而不是闪退循环。 */
+        internal fun isWebViewUnavailable(t: Throwable): Boolean {
+            var cur: Throwable? = t
+            var depth = 0
+            while (cur != null && depth++ < 8) {
+                val name = cur.javaClass.name
+                val msg = cur.message.orEmpty()
+                if (name.contains("MissingWebViewPackageException", ignoreCase = true) ||
+                    cur is UnsatisfiedLinkError ||
+                    msg.contains("MissingWebViewPackageException", ignoreCase = true) ||
+                    msg.contains("No WebView installed", ignoreCase = true) ||
+                    msg.contains("Failed to load WebView provider", ignoreCase = true) ||
+                    msg.contains("com.google.android.webview", ignoreCase = true) ||
+                    msg.contains("com.android.webview", ignoreCase = true)
+                ) {
+                    return true
+                }
+                cur = cur.cause
+            }
+            return false
+        }
+
+        /** 缺少系统 WebView 时的纯原生降级页：不依赖 WebView，告知原因、局域网管理地址并提供重试/退出入口。 */
+        fun buildUnavailableView(
+            context: Context,
+            title: String,
+            onRetry: () -> Unit,
+            onExit: () -> Unit
+        ): View {
+            val dp = context.resources.displayMetrics.density
+            fun px(v: Int) = (v * dp).toInt()
+            val tv = DeviceBridge.isTv(context)
+            val lanUrl = try {
+                val info = DeviceRuntime.connection(context)
+                val ip = info.optString("ip").trim()
+                val port = info.optInt("port", Prefs.localPort(context))
+                if (ip.isNotEmpty()) "http://$ip:$port" else ""
+            } catch (_: Throwable) { "" }
+            val container = android.widget.LinearLayout(context).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = if (tv) android.view.Gravity.CENTER_HORIZONTAL else android.view.Gravity.NO_GRAVITY
+                setPadding(px(28), px(if (tv) 36 else 48), px(28), px(36))
+                setBackgroundColor(TvUi.background(context))
+            }
+            val col = android.widget.LinearLayout(context).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+            }
+            container.addView(col, android.widget.LinearLayout.LayoutParams(if (tv) px(560) else -1, -2))
+            fun label(text: String, size: Float, color: Int = TvUi.foreground(context), bold: Boolean = false) =
+                android.widget.TextView(context).apply {
+                    this.text = text
+                    textSize = size
+                    setTextColor(color)
+                    paint.isFakeBoldText = bold
+                    setPadding(0, px(8), 0, px(8))
+                }
+            col.addView(label(title, if (tv) 28f else 24f, bold = true))
+            col.addView(label(
+                "当前设备的精简系统缺少 Android System WebView 组件，无法加载内置页面。\n\n" +
+                    "解决方法：\n" +
+                    "1. 在电视应用商店或通过 U 盘安装「Android System WebView」后点击重试；\n" +
+                    "2. 家长管理后台不受影响，可直接用手机浏览器访问局域网地址。" +
+                    if (lanUrl.isNotEmpty()) "\n\n家长后台地址：$lanUrl/admin" else "",
+                15f,
+                TvUi.muted(context)
+            ))
+            val retryBtn = TvUi.button(context, "重新尝试加载", true) { onRetry() }
+            col.addView(retryBtn, android.widget.LinearLayout.LayoutParams(-1, px(54)).apply { topMargin = px(16) })
+            col.addView(TvUi.button(context, "返回") { onExit() },
+                android.widget.LinearLayout.LayoutParams(-1, px(50)).apply { topMargin = px(12) })
+            retryBtn.requestFocus()
+            return android.widget.ScrollView(context).apply {
+                isFillViewport = true
+                setBackgroundColor(TvUi.background(context))
+                addView(container)
             }
         }
 

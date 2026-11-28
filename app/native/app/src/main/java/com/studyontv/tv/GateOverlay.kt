@@ -136,13 +136,19 @@ class GateOverlay(
         val reused = web != null
         val page = gateLearningPage(reason)
         val url = Prefs.localBase(context) + "#/$page"
-        val view = web ?: WebShell(context).create("about:blank").also { created ->
+        val view = web ?: run {
+            val created = WebShell(context).createOrNull("about:blank")
+            if (created == null) {
+                fail("webview-missing", "系统缺少 WebView 组件，无法显示悬浮学习页")
+                return false
+            }
             created.addJavascriptInterface(Bridge(), "SOTVNative")
             created.setOnKeyListener { _, _, event -> remote.handle(created, event) }
             // 老电视（斐讯 T1 等）在 WebView 还没 attach 时就开始加载，挂到悬浮层后容易一直是黑屏。
             // 先创建空的 WebView，addView 成功后再 loadUrl；必要时用软件层兜底。
             if (Build.VERSION.SDK_INT < 26) created.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
             web = created
+            created
         }
         val host = container ?: FrameLayout(context).also { created ->
             created.addView(view, FrameLayout.LayoutParams(-1, -1))

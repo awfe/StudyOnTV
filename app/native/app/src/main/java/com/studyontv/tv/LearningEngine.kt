@@ -50,6 +50,37 @@ class LearningEngine(
 ) {
     companion object {
         private val SECRET_QUESTION_FIELDS = listOf("k", "answers", "correctIndices", "tip", "modelAnswer", "rubric")
+        /** 单次扣时安全封顶（60 分钟），移除旧 5 秒硬截断以免 OEM 后台节流吞掉真实活跃时长 */
+        internal const val MAX_SINGLE_CONSUME_MS = 60 * 60 * 1000L
+
+        internal data class UsageDeduction(
+            val freeQuotaConsumed: Long,
+            val bootQuotaConsumed: Long,
+            val creditConsumed: Long
+        ) {
+            val totalConsumed: Long get() = freeQuotaConsumed + bootQuotaConsumed + creditConsumed
+        }
+
+        /**
+         * 纯函数扣时规划：按 free_quota_ms -> boot_quota_ms -> credit_ms 顺序无缝扣减，
+         * 当免费额度耗尽时把余数继续扣到 credit_ms，不丢尾数。
+         */
+        internal fun planUsageDeduction(
+            requestedMs: Long,
+            availableMs: Long,
+            freeQuotaMs: Long,
+            bootQuotaMs: Long,
+            creditMs: Long,
+            maxSingleMs: Long = MAX_SINGLE_CONSUME_MS
+        ): UsageDeduction {
+            var left = min(requestedMs.coerceIn(0L, maxSingleMs.coerceAtLeast(0L)), availableMs.coerceAtLeast(0L))
+            val freeConsumed = min(left, freeQuotaMs.coerceAtLeast(0L))
+            left -= freeConsumed
+            val bootConsumed = min(left, bootQuotaMs.coerceAtLeast(0L))
+            left -= bootConsumed
+            val creditConsumed = min(left, creditMs.coerceAtLeast(0L))
+            return UsageDeduction(freeConsumed, bootConsumed, creditConsumed)
+        }
 
         /** 闪卡自评的纯状态机计划：在写库前统一完成轮次匹配、卡组归属与同轮幂等去重校验。 */
         internal data class FlashcardRatePlan(
@@ -746,16 +777,19 @@ class LearningEngine(
             else if (reason in listOf("quota", "rounds", "schedule")) nextAvailable(c, reason != "schedule") else 0L
         // 每日免费、开机免费和奖励额度都可以放行返回键和 Home 键。
         val canExit = computeCanExit(supervision, reason, remaining, freeQuota, free)
+        val activeRound = active()
         val result = JSONObject().put("remainingSeconds", remaining / 1000).put("usedMinutes", used / 60000.0)
             .put("supervisionEnabled", supervision)
             .put("quizGeneration", number("quiz_generation"))
+            .put("activeRoundId", activeRound?.optString("id").orEmpty())
+            .put("activeNonce", activeRound?.optString("nonce").orEmpty())
             .put("extraPool", number("extra_pool")).put("wrongProgress", number("wrong_progress"))
             .put("nextAvailableAt", nextAt).put("nextAtText", if (nextAt > 0) DeviceClock.format(nextAt, store) else "").put("free", free)
             .put("restSeconds", (rest + 999) / 1000).put("feedbackSeconds", (hold + 999) / 1000)
             .put("todayLimitMinutes", if (supervision && c.optBoolean("dailyLimitEnabled", true)) time.dailyLimit(limit) / 60000.0 else JSONObject.NULL)
             .put("bootFreeSeconds", min(number("boot_quota_ms"), freeQuota) / 1000)
             .put("freeQuotaSeconds", freeQuota / 1000)
-            .put("roundsDoneToday", rounds).put("reason", reason).put("override", o ?: JSONObject.NULL).put("awaitingReview", active()?.has("pendingReview") == true)
+            .put("roundsDoneToday", rounds).put("reason", reason).put("override", o ?: JSONObject.NULL).put("awaitingReview", activeRound?.has("pendingReview") == true)
             .put("activePoint", point?.let { JSONObject().put("name", it.name).put("mode", it.mode).put("until", it.until) } ?: JSONObject.NULL)
             .put("canExit", canExit)
             .put("scheduleText", scheduleText(c))
@@ -772,6 +806,18 @@ class LearningEngine(
         try { consumeUsage(milliseconds) } finally { publishNavigation() }
     }
 
+    /** 扣时并直接返回最新状态：消除 GateService 单 tick 内 publishNavigation() + status() 的重复查库 */
+    @Synchronized
+    fun consumeAndStatus(milliseconds: Long): JSONObject {
+        try {
+            consumeUsage(milliseconds)
+        } catch (e: Exception) {
+            publishNavigation()
+            throw e
+        }
+        return status()
+    }
+
     private fun consumeUsage(milliseconds: Long) {
         day()
         val config = store.config()
@@ -779,47 +825,52 @@ class LearningEngine(
         if (time.restLeft(config) > 0 || time.left("feedback_deadline") > 0) { flushUsage(); return }
         if (freeNow(config)) { flushUsage(); return }
         if (config.optString("scheduleMode", "allow") != "control" && !inWindow(config)) { flushUsage(); return }
-        val available = capacity(config)
-        val freeKey = if (number("free_quota_ms") > 0) "free_quota_ms" else "boot_quota_ms"
-        val freeQuotaNow = number(freeKey)
-        if (freeQuotaNow > 0) {
-            val freeConsumed = min(milliseconds.coerceIn(0, 5000), min(freeQuotaNow, available))
-            if (freeConsumed > 0) {
-                val db = store.writableDatabase
-                db.beginTransaction()
-                try {
-                    put(freeKey, freeQuotaNow - freeConsumed)
-                    if (freeKey == "free_quota_ms") put("free_used_ms", number("free_used_ms") + freeConsumed)
-                    time.consumed(config, freeConsumed)
-                    put("used_ms", number("used_ms") + freeConsumed)
-                    pendingUsageMs += freeConsumed
-                    if (pendingUsageMs >= 30000 || freeQuotaNow == freeConsumed) flushUsage()
-                    db.setTransactionSuccessful()
-                } finally { db.endTransaction() }
-                return
-            }
-            flushUsage(); return
-        }
-        val amount = min(milliseconds.coerceIn(0, 5000), min(number("credit_ms"), available))
-        if (amount <= 0) { flushUsage(); return }
+        val freeQuotaNow = number("free_quota_ms")
+        val bootQuotaNow = number("boot_quota_ms")
+        val creditNow = number("credit_ms")
+        val plan = planUsageDeduction(
+            requestedMs = milliseconds,
+            availableMs = capacity(config),
+            freeQuotaMs = freeQuotaNow,
+            bootQuotaMs = bootQuotaNow,
+            creditMs = creditNow
+        )
+        if (plan.totalConsumed <= 0L) { flushUsage(); return }
         val db = store.writableDatabase
         db.beginTransaction()
         try {
-            put("credit_ms", number("credit_ms") - amount)
-            put("used_ms", number("used_ms") + amount)
-            pendingUsageMs += amount
-            time.consumed(config, amount)
-            if (pendingUsageMs >= 30000 || number("credit_ms") <= 0) flushUsage()
+            if (plan.freeQuotaConsumed > 0L) {
+                put("free_quota_ms", (freeQuotaNow - plan.freeQuotaConsumed).coerceAtLeast(0L))
+                put("free_used_ms", number("free_used_ms") + plan.freeQuotaConsumed)
+            }
+            if (plan.bootQuotaConsumed > 0L) {
+                put("boot_quota_ms", (bootQuotaNow - plan.bootQuotaConsumed).coerceAtLeast(0L))
+            }
+            if (plan.creditConsumed > 0L) {
+                put("credit_ms", (creditNow - plan.creditConsumed).coerceAtLeast(0L))
+            }
+            put("used_ms", number("used_ms") + plan.totalConsumed)
+            pendingUsageMs += plan.totalConsumed
+            time.consumed(config, plan.totalConsumed)
+            val quotaExhausted = (plan.freeQuotaConsumed > 0L && freeQuotaNow <= plan.freeQuotaConsumed) ||
+                (plan.bootQuotaConsumed > 0L && bootQuotaNow <= plan.bootQuotaConsumed) ||
+                (plan.creditConsumed > 0L && creditNow <= plan.creditConsumed)
+            if (pendingUsageMs >= 30_000L || quotaExhausted) flushUsage()
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
 
     @Synchronized
     fun consumeRecovered(milliseconds: Long) {
-        var left = milliseconds.coerceAtLeast(0)
-        while (left > 0) {
-            consume(minOf(left, 5000L))
-            left -= 5000L
+        try {
+            var left = milliseconds.coerceAtLeast(0L)
+            while (left > 0L) {
+                val chunk = minOf(left, MAX_SINGLE_CONSUME_MS)
+                consumeUsage(chunk)
+                left -= chunk
+            }
+        } finally {
+            publishNavigation()
         }
     }
 

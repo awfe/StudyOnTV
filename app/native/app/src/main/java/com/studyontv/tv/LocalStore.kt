@@ -467,6 +467,13 @@ class LocalStore(
     /** 按孩子缓存归一化后的配置 JSON 字符串，避免每秒 tick 反复查库、跑正则和解析周计划。 */
     private val configCache = ConcurrentHashMap<String, String>()
 
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        try {
+            db.enableWriteAheadLogging()
+        } catch (_: Exception) { }
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         // bank / type 原来只存在 details 这个 JSON 字段里，题库页筛选、覆盖率统计都得全表扫描再逐行解析。
         // 第 9 版起同时写成独立列，筛选和排序能走索引，details 仍是完整题目（导出格式不变）。

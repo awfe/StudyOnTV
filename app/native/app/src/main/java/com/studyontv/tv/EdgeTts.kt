@@ -61,6 +61,34 @@ object EdgeTts {
         }
     }
 
+    internal fun containsCjk(text: String): Boolean {
+        for (ch in text) {
+            val code = ch.code
+            if (code in 0x4E00..0x9FFF || code in 0x3400..0x4DBF || code in 0xF900..0xFAFF) return true
+        }
+        return false
+    }
+
+    internal fun hasSpeakableContent(text: String): Boolean {
+        for (ch in text) {
+            if (Character.isLetterOrDigit(ch)) return true
+        }
+        return false
+    }
+
+    /**
+     * Edge 的纯英文音色（en-US-JennyNeural / en-GB-SoniaNeural）遇到中文文本（例如英文题的中文解析
+     * 「解析：考察一般过去时…」）会静默丢弃所有汉字并返回 0 字节空音频。
+     * 含汉字时自动切到可中英混读的中文音色，彻底消除 en-US 场景空音频失败。
+     */
+    internal fun resolveEffectiveVoice(text: String, configuredVoice: String, language: String): String {
+        val base = configuredVoice.trim().ifEmpty { defaultVoice(language) }
+        if (base.startsWith("en-", ignoreCase = true) && containsCjk(text)) {
+            return "zh-CN-XiaoxiaoNeural"
+        }
+        return base
+    }
+
     private class Handshake403Exception(message: String, val serverMillis: Long?) : IllegalStateException(message)
 
     internal fun requireOnlineAllowed(localOnly: Boolean = LocalOnlyGuard.enabled) {
@@ -80,7 +108,8 @@ object EdgeTts {
 
     fun synthesize(text: String, voice: String, language: String = "", rate: Double = 1.0): ByteArray {
         requireOnlineAllowed()
-        val chosenVoice = voice.trim().ifEmpty { defaultVoice(language) }
+        require(hasSpeakableContent(text)) { "朗读内容不含可发声文字" }
+        val chosenVoice = resolveEffectiveVoice(text, voice, language)
         val pct = (((rate.coerceIn(0.7, 1.5)) - 1.0) * 100.0).toInt()
         val rateStr = if (pct >= 0) "+${pct}%" else "${pct}%"
         return synthesizeWithRetry(text, chosenVoice, rateStr, addressOffset = 0, allowTransientRetry = true)
@@ -135,11 +164,7 @@ object EdgeTts {
                 val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
                 return (sslFactory.createSocket(raw, HOST, PORT, true) as SSLSocket).apply {
                     soTimeout = 15_000
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                        sslParameters = sslParameters.apply {
-                            endpointIdentificationAlgorithm = "HTTPS"
-                        }
-                    }
+                    configureTlsSocket(this, HOST)
                     startHandshake()
                     if (!javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(HOST, session)) {
                         throw javax.net.ssl.SSLPeerUnverifiedException("Hostname $HOST not verified")
@@ -151,6 +176,32 @@ object EdgeTts {
             }
         }
         throw lastError ?: IllegalStateException("无法连接 Edge 语音服务")
+    }
+
+    /**
+     * Android 5.x/6.x（API 21–23）上对已连接 IP 的 Socket 包装 SSLSocket 时，默认不会自动发 TLS SNI，
+     * 微软 CDN 会回退错误默认证书从而触发 SSLPeerUnverifiedException。
+     * 显式开启 SNI 与 TLSv1.2，兼容老电视并保留主机名校验。
+     */
+    internal fun configureTlsSocket(socket: SSLSocket, host: String) {
+        val supported = socket.supportedProtocols.orEmpty()
+        val preferred = listOf("TLSv1.3", "TLSv1.2").filter { it in supported }
+        if (preferred.isNotEmpty()) {
+            try { socket.enabledProtocols = preferred.toTypedArray() } catch (_: Throwable) { }
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            socket.sslParameters = socket.sslParameters.apply {
+                serverNames = listOf(javax.net.ssl.SNIHostName(host))
+                endpointIdentificationAlgorithm = "HTTPS"
+            }
+        } else {
+            try {
+                socket.javaClass.getMethod("setHostname", String::class.java).invoke(socket, host)
+            } catch (_: Throwable) { }
+            try {
+                socket.javaClass.getMethod("setUseSessionTickets", Boolean::class.javaPrimitiveType).invoke(socket, true)
+            } catch (_: Throwable) { }
+        }
     }
 
     private fun synthesizeOnce(
