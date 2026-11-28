@@ -19,8 +19,8 @@ android {
         minSdk = 21          // Android 5.0
         targetSdk = 34
         testInstrumentationRunner = "com.studyontv.tv.RegressionInstrumentation"
-        versionCode = 57
-        versionName = "0.5.10"
+        versionCode = 58
+        versionName = "0.5.11"
         // 带电视桌面的包在 desktop 这个 buildType 里改成 true
         buildConfigField("boolean", "DESKTOP", "false")
         // 仅本地隐私版（EU Local-Only，Issue #175）：通过 -PlocalOnly=true 构建，彻底关闭一切公网连接与上报
