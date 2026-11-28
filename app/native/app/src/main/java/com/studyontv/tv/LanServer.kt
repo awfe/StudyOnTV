@@ -465,14 +465,15 @@ class LanServer(
         }
         router.get("/api/state") { ctx ->
             DeviceRuntime.learning.flushUsage()
+            val learning = DeviceRuntime.learning.status()
             json(ctx, 200, JSONObject()
                 .put("config", store.config())
                 .put("today", store.todayStats())
                 .put("questions", store.countQuestions())
-                .put("roundsDoneToday", store.roundsDoneToday())
+                .put("roundsDoneToday", learning.getInt("roundsDoneToday"))
                 .put("repetition", store.repetitionStats())
                 .put("study", store.studySummary())
-                .put("learning", DeviceRuntime.learning.status())
+                .put("learning", learning)
                 .put("children", store.children()).put("activeChild", store.activeChild())
                 .put("speech", JSONObject()
                     .put("autoRead", SpeechReader.settings(store).optBoolean("autoRead"))

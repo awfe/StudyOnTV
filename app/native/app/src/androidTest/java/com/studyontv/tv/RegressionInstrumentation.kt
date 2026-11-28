@@ -8,6 +8,7 @@ import org.json.JSONObject
 
 /** 无第三方测试依赖；只使用独立数据库，不修改家庭题库。 */
 class RegressionInstrumentation : Instrumentation() {
+    private var clockQuota = false
     private var probe = false
     private var video = false
     private var children = false
@@ -21,6 +22,7 @@ class RegressionInstrumentation : Instrumentation() {
     private var videoUrl = ""
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
+        clockQuota = arguments?.getString("clockQuota") == "1"
         probe = arguments?.getString("probe") == "1"
         video = arguments?.getString("video") == "1"
         children = arguments?.getString("children") == "1"
@@ -37,6 +39,17 @@ class RegressionInstrumentation : Instrumentation() {
 
     override fun onStart() {
         val results = Bundle()
+        if (clockQuota) {
+            try {
+                FeatureRegression.clockQuota(targetContext)
+                results.putString("stream", "PASS: 免费时长间隔、网络校时、日期回拨、跨午夜结算与备份合并\n")
+                finish(Activity.RESULT_OK, results)
+            } catch (e: Throwable) {
+                results.putString("stream", android.util.Log.getStackTraceString(e))
+                finish(Activity.RESULT_CANCELED, results)
+            }
+            return
+        }
         if (st60x) {
             try {
                 results.putString("stream", St60xApiRegression.run(targetContext) + "\n")
