@@ -70,7 +70,7 @@ export async function previewApi(path:string,method:string,body:any){
  if(route==='/api/system-settings')return{ok:true};
  if(route==='/api/remote'){
   if(body.action==='credit'){learning.remainingSeconds=Math.max(0,learning.remainingSeconds+body.minutes*60);learning.todayLimitMinutes=(learning.todayLimitMinutes??config.dailyMinutes)+body.minutes;return structuredClone({learning});}
-  learning.override=body.action==='cancel'?null:{mode:body.action,remainingSeconds:(body.minutes||30)*60,at:Date.now()};
+  learning.override=body.action==='cancel'?null:{mode:body.action,untilShutdown:body.untilShutdown===true,remainingSeconds:body.untilShutdown?-1:(body.minutes||30)*60,at:Date.now()};
   return structuredClone({learning});
  }
  if(route==='/api/config'){if(method==='PUT')config={...config,...body,version:config.version+1};return structuredClone({config});}
