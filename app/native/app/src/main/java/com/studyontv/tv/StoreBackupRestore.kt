@@ -4,6 +4,82 @@ import android.content.ContentValues
 import android.database.sqlite.SQLiteDatabase
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+
+private const val BACKUP_MAX_DATA_URL_LEN = 2_800_000
+private const val BACKUP_MAX_DECODED_BYTES = 2_000_000
+
+/**
+ * 备份恢复 / 局域网同步时的题目媒体自愈：
+ * - 允许旧版备份中较大的内联 Data URL（上限 2 MB）直接转存本地媒体文件，避免误触发 900 KB 录入限制；
+ * - 遇到损坏/失效的配图或音频地址时仅摘除该字段（并保持 optionImages 下标对齐），不让单道坏图拖垮整库恢复。
+ */
+internal fun sanitizeBackupQuestionMedia(item: JSONObject, mediaDir: File): Pair<JSONObject, Int> {
+    val hasMediaField = item.optString("image").isNotBlank() ||
+        item.optString("audio").isNotBlank() ||
+        item.has("images") ||
+        item.has("optionImages")
+    if (!hasMediaField) return item to 0
+
+    val copy = JSONObject(item.toString())
+    var stripped = 0
+
+    fun normalizeOrStrip(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return ""
+        return try {
+            MediaStore.normalizeImageRef(
+                mediaDir,
+                trimmed,
+                maxDataUrlLen = BACKUP_MAX_DATA_URL_LEN,
+                maxDecodedBytes = BACKUP_MAX_DECODED_BYTES
+            )
+        } catch (_: IllegalArgumentException) {
+            stripped++
+            ""
+        }
+    }
+
+    if (copy.optString("image").isNotBlank()) {
+        copy.put("image", normalizeOrStrip(copy.optString("image")))
+    }
+    copy.optJSONArray("images")?.let { rawImages ->
+        val cleaned = JSONArray()
+        for (i in 0 until minOf(rawImages.length(), 4)) {
+            val v = rawImages.optString(i).trim()
+            if (v.isEmpty()) continue
+            val normalized = normalizeOrStrip(v)
+            if (normalized.isNotEmpty()) cleaned.put(normalized)
+        }
+        copy.put("images", cleaned)
+        if (copy.optString("image").isEmpty() && cleaned.length() > 0) {
+            copy.put("image", cleaned.getString(0))
+        }
+    }
+    copy.optJSONArray("optionImages")?.let { rawOpts ->
+        val cleaned = JSONArray()
+        val optTexts = copy.optJSONArray("a")
+        for (i in 0 until minOf(rawOpts.length(), 8)) {
+            val v = rawOpts.optString(i).trim()
+            val normalized = if (v.isEmpty()) "" else normalizeOrStrip(v)
+            cleaned.put(normalized)
+            if (v.isNotEmpty() && normalized.isEmpty() && optTexts != null && i < optTexts.length() && optTexts.optString(i).isBlank()) {
+                optTexts.put(i, "（配图已失效）")
+            }
+        }
+        copy.put("optionImages", cleaned)
+    }
+    val rawAudio = copy.optString("audio").trim()
+    if (rawAudio.isNotEmpty()) {
+        val validAudio = (rawAudio.startsWith("https://") || rawAudio.startsWith("http://")) && rawAudio.length <= 2048
+        val conflictWithListen = copy.optString("listen").trim().isNotEmpty()
+        if (!validAudio || conflictWithListen) {
+            copy.put("audio", "")
+            stripped++
+        }
+    }
+    return copy to stripped
+}
 
 internal fun LocalStore.applyScopedSyncImpl(payload: JSONObject, scopes: Set<String>, mode: String): JSONObject {
     require(payload.optString("format") == "studyontv-backup") { "不是有效的题了个题同步数据包" }
@@ -16,6 +92,8 @@ internal fun LocalStore.applyScopedSyncImpl(payload: JSONObject, scopes: Set<Str
     val existingGrading = try { JSONObject(rawGet("grading_settings", "{}")) } catch (_: Exception) { JSONObject() }
     val existingSpeech = try { JSONObject(rawGet("speech_settings", "{}")) } catch (_: Exception) { JSONObject() }
     var syncedQuestions = 0
+    var skippedQuestions = 0
+    var strippedMedia = 0
 
     synchronized(childLock) {
         db.beginTransaction()
@@ -59,8 +137,15 @@ internal fun LocalStore.applyScopedSyncImpl(payload: JSONObject, scopes: Set<Str
                         val q = arr.optJSONObject(i) ?: continue
                         val qid = q.optString("id")
                         if (!replaceQuestions && qid.isNotEmpty() && questionExists(qid)) continue
-                        upsertQuestion(q)
-                        syncedQuestions++
+                        val (cleaned, stripped) = sanitizeBackupQuestionMedia(q, mediaDir)
+                        strippedMedia += stripped
+                        try {
+                            upsertQuestion(cleaned)
+                            syncedQuestions++
+                        } catch (e: IllegalArgumentException) {
+                            skippedQuestions++
+                            Diag.warn("Store", "scoped sync skipped invalid question id=$qid: ${e.message}")
+                        }
                     }
                 }
             }
@@ -97,6 +182,7 @@ internal fun LocalStore.applyScopedSyncImpl(payload: JSONObject, scopes: Set<Str
             db.endTransaction()
         }
     }
+    if (strippedMedia > 0) Diag.warn("Store", "scoped sync sanitized $strippedMedia invalid media ref(s)")
     if ("questions" in validScopes && !db.inTransaction()) pruneMedia()
     val totalQ = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
     return JSONObject()
@@ -106,6 +192,8 @@ internal fun LocalStore.applyScopedSyncImpl(payload: JSONObject, scopes: Set<Str
         .put("children", children().length())
         .put("questions", totalQ)
         .put("syncedQuestions", syncedQuestions)
+        .put("skippedQuestions", skippedQuestions)
+        .put("strippedMedia", strippedMedia)
 }
 
 internal fun LocalStore.restoreBackupImpl(backup: JSONObject, mode: String, scopes: Set<String>?): JSONObject {
@@ -118,6 +206,8 @@ internal fun LocalStore.restoreBackupImpl(backup: JSONObject, mode: String, scop
     // 先保存本机已有的 API Key，防止脱敏备份把本机配好的密钥冲成空
     val existingGrading = try { JSONObject(rawGet("grading_settings", "{}")) } catch (_: Exception) { JSONObject() }
     val existingSpeech = try { JSONObject(rawGet("speech_settings", "{}")) } catch (_: Exception) { JSONObject() }
+    var skippedQuestions = 0
+    var strippedMedia = 0
 
     // 统一锁顺序：永远先 childLock、再 SQLite 写事务，避免与 switchChild()/activeChild() 产生 AB-BA 死锁
     synchronized(childLock) {
@@ -187,7 +277,14 @@ internal fun LocalStore.restoreBackupImpl(backup: JSONObject, mode: String, scop
                     val q = arr.optJSONObject(i) ?: continue
                     val qid = q.optString("id")
                     if (conflictMode && qid.isNotEmpty() && questionExists(qid)) continue
-                    upsertQuestion(q)
+                    val (cleaned, stripped) = sanitizeBackupQuestionMedia(q, mediaDir)
+                    strippedMedia += stripped
+                    try {
+                        upsertQuestion(cleaned)
+                    } catch (e: IllegalArgumentException) {
+                        skippedQuestions++
+                        Diag.warn("Store", "backup restore skipped invalid question id=$qid: ${e.message}")
+                    }
                 }
             }
 
@@ -319,6 +416,7 @@ internal fun LocalStore.restoreBackupImpl(backup: JSONObject, mode: String, scop
             db.endTransaction()
         }
     }
+    if (strippedMedia > 0) Diag.warn("Store", "backup restore sanitized $strippedMedia invalid media ref(s)")
     if (!db.inTransaction()) pruneMedia()
     val totalQ = readableDatabase.rawQuery("SELECT COUNT(*) FROM questions", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
     val totalEv = readableDatabase.rawQuery("SELECT COUNT(*) FROM events", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
@@ -329,4 +427,6 @@ internal fun LocalStore.restoreBackupImpl(backup: JSONObject, mode: String, scop
         .put("questions", totalQ)
         .put("events", totalEv)
         .put("reviews", totalRev)
+        .put("skippedQuestions", skippedQuestions)
+        .put("strippedMedia", strippedMedia)
 }

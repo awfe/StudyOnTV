@@ -28,6 +28,7 @@ class UpdateActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        UpdateDownload.cancelInstallReadyNotification(this)
         if (LocalOnlyGuard.enabled) {
             finish()
             return

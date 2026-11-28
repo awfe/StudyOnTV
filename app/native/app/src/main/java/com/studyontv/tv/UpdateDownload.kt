@@ -1,7 +1,12 @@
 package com.studyontv.tv
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicReference
 
@@ -9,6 +14,8 @@ import java.util.concurrent.atomic.AtomicReference
  * APK 预下载、本地安装包校验与 Web 一键远程更新的线程安全状态机（ST-603 / ST-607）。
  */
 internal object UpdateDownload {
+    private const val UPDATE_NOTIFICATION_ID = 1007
+    private const val UPDATE_CHANNEL_ID = "sotv_update"
     private val installSnapshotRef = AtomicReference(Updater.InstallSnapshot())
 
     fun checkApkReady(
@@ -272,14 +279,17 @@ internal object UpdateDownload {
 
                 val beforeLaunch = updateInstallState("installing", 100, "安装包已下载完成，正在拉起设备安装界面…", targetInfo.latest)
                 GateService.allowInstallPage()
+                val launchIntent = Intent(appCtx, UpdateActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra("payload", Updater.toJson(targetInfo).toString())
+                    putExtra("apkPath", readyFile.absolutePath)
+                    putExtra("auto", true)
+                }
+                // MIUI/HyperOS 后台 startActivity 可能被 ActivityStarterImpl 静默丢弃而不抛异常（#202），
+                // 同步发出高优先级可点击安装通知兜底；UpdateActivity 成功打开后会自动清除该通知。
+                postInstallReadyNotification(appCtx, targetInfo.latest, launchIntent)
                 val launched = try {
-                    val intent = Intent(appCtx, UpdateActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        putExtra("payload", Updater.toJson(targetInfo).toString())
-                        putExtra("apkPath", readyFile.absolutePath)
-                        putExtra("auto", true)
-                    }
-                    appCtx.startActivity(intent)
+                    appCtx.startActivity(launchIntent)
                     true
                 } catch (e: Exception) {
                     Diag.warn("Update", "remote startActivity(UpdateActivity) blocked: ${e.javaClass.simpleName} ${e.message}")
@@ -287,13 +297,19 @@ internal object UpdateDownload {
                 }
 
                 if (launched) {
-                    compareAndUpdateInstallState(beforeLaunch, "installing", 100, "安装包已下载完成，请在设备屏幕上确认安装", targetInfo.latest)
+                    compareAndUpdateInstallState(
+                        beforeLaunch,
+                        "installing",
+                        100,
+                        "安装包已下载完成，请在设备屏幕上确认安装（小米/澎湃平板若未自动弹出，请下拉通知栏点击「新版本已下载就绪」继续安装）",
+                        targetInfo.latest
+                    )
                 } else {
                     val fallbackOk = try { ApkInstaller.install(appCtx, readyFile) } catch (_: Exception) { false }
                     if (fallbackOk) {
                         compareAndUpdateInstallState(beforeLaunch, "installing", 100, "安装包已提交系统安装器，请在设备屏幕上确认安装", targetInfo.latest)
                     } else {
-                        val reason = ApkInstaller.lastError.ifBlank { "系统限制了后台拉起安装界面，请在电视/平板上打开应用完成安装" }
+                        val reason = ApkInstaller.lastError.ifBlank { "系统限制了后台拉起安装界面，请下拉设备通知栏点击更新提示或打开应用完成安装" }
                         compareAndUpdateInstallState(beforeLaunch, "error", 100, reason, targetInfo.latest)
                     }
                 }
@@ -303,5 +319,46 @@ internal object UpdateDownload {
             }
         }.apply { isDaemon = true }.start()
         return 200 to Updater.status(ctx)
+    }
+
+    @Suppress("DEPRECATION")
+    internal fun postInstallReadyNotification(ctx: Context, version: String, launchIntent: Intent) {
+        try {
+            val manager = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            if (Build.VERSION.SDK_INT >= 26) {
+                manager.createNotificationChannel(
+                    NotificationChannel(UPDATE_CHANNEL_ID, "版本更新", NotificationManager.IMPORTANCE_HIGH)
+                )
+            }
+            val pi = PendingIntent.getActivity(
+                ctx,
+                7,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val builder = if (Build.VERSION.SDK_INT >= 26) {
+                Notification.Builder(ctx, UPDATE_CHANNEL_ID)
+            } else {
+                Notification.Builder(ctx)
+            }
+            val notification = builder
+                .setContentTitle("新版本 v$version 已下载就绪")
+                .setContentText("点击立即安装更新（题库与设置不会丢失）")
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .build()
+            manager.notify(UPDATE_NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            Diag.warn("Update", "post install notification failed: ${e.javaClass.simpleName}")
+        }
+    }
+
+    internal fun cancelInstallReadyNotification(ctx: Context) {
+        try {
+            val manager = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            manager?.cancel(UPDATE_NOTIFICATION_ID)
+        } catch (_: Exception) { }
     }
 }

@@ -26,11 +26,14 @@ type Props = {
   hasFilters: boolean;
   selected: string[];
   pausedCount: number;
+  showAll: boolean;
   bankFilter: string;
   bulkPending: boolean;
   deleteBankPending: boolean;
   onPage: (page: number) => void;
   onToggle: (id: string) => void;
+  onToggleShowAll: () => void;
+  onToggleEnabled: (id: string, enabled: boolean) => void;
   onSelectPage: () => void;
   onSelectAll: (checked: boolean) => void;
   onClearSelection: () => void;
@@ -84,6 +87,7 @@ export default function QuestionList(props: Props) {
     hasFilters,
     selected,
     pausedCount,
+    showAll,
     bankFilter,
     bulkPending,
     deleteBankPending,
@@ -130,7 +134,15 @@ export default function QuestionList(props: Props) {
           <>
             <ToolbarGroup>
               <Count value={total} suffix="道题目" />
-              {pausedCount > 0 && <Count value={pausedCount} suffix="道已暂停" />}
+              {pausedCount > 0 && (
+                <Button
+                  size="sm"
+                  variant={showAll ? 'secondary' : 'outline'}
+                  onClick={props.onToggleShowAll}
+                >
+                  {showAll ? `隐藏已暂停（${pausedCount}）` : `查看已暂停（${pausedCount}）`}
+                </Button>
+              )}
             </ToolbarGroup>
             <ToolbarGroup className="ms-auto">
               {bankFilter !== 'all' && (
@@ -159,7 +171,9 @@ export default function QuestionList(props: Props) {
         items={items}
         selected={selected}
         allSelected={allSelected}
+        togglePending={bulkPending}
         onToggle={props.onToggle}
+        onToggleEnabled={props.onToggleEnabled}
         onSelectAll={props.onSelectAll}
         onOpen={props.onOpen}
         onEdit={props.onEdit}
@@ -171,6 +185,17 @@ export default function QuestionList(props: Props) {
           <div className="px-6 py-16 text-center">
             <FieldDescription>正在加载题库…</FieldDescription>
           </div>
+        ) : total === 0 && !hasFilters && pausedCount > 0 && !showAll ? (
+          <EmptyState
+            icon={BookOpen}
+            title={`当前有 ${pausedCount} 道已暂停的题目`}
+            description="已暂停的题目默认隐藏，点击下方按钮可查看并一键恢复"
+            action={
+              <Button size="sm" onClick={props.onToggleShowAll}>
+                查看已暂停题目
+              </Button>
+            }
+          />
         ) : total === 0 && !hasFilters ? (
           <EmptyState
             icon={BookOpen}

@@ -1,4 +1,4 @@
-import { ChevronRight, Copy, Image as ImageIcon, Pencil, Trash2 } from 'lucide-react';
+import { ChevronRight, Copy, Image as ImageIcon, Pencil, Play, Trash2 } from 'lucide-react';
 import { resolveMediaUrl } from '@/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -11,7 +11,9 @@ type Props = {
   items: any[];
   selected: string[];
   allSelected: boolean;
+  togglePending?: boolean;
   onToggle: (id: string) => void;
+  onToggleEnabled: (id: string, enabled: boolean) => void;
   onSelectAll: (checked: boolean) => void;
   onOpen: (id: string) => void;
   onEdit: (q?: any, copy?: boolean) => void;
@@ -51,14 +53,18 @@ export default function QuestionListRows(props: Props) {
               <TableHead className="w-20 px-3">年级</TableHead>
               <TableHead className="w-24 px-3">难度</TableHead>
               <TableHead className="w-[18%] px-3">答案</TableHead>
-              <TableHead className="w-28 px-3 text-right">操作</TableHead>
+              <TableHead className="w-40 px-3 text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {items.map((q: any) => {
               const thumb = firstPreviewMedia(q);
               return (
-                <TableRow key={q.id} className="cursor-pointer" onClick={() => props.onOpen(q.id)}>
+                <TableRow
+                  key={q.id}
+                  className={q.enabled === false ? 'cursor-pointer opacity-75' : 'cursor-pointer'}
+                  onClick={() => props.onOpen(q.id)}
+                >
                   <TableCell className="px-3" onClick={e => e.stopPropagation()}>
                     <Checkbox
                       aria-label="选择题目"
@@ -100,7 +106,19 @@ export default function QuestionListRows(props: Props) {
                     <MathText text={answerOf(q)} className="truncate text-muted-foreground" />
                   </TableCell>
                   <TableCell className="px-3" onClick={e => e.stopPropagation()}>
-                    <div className="flex justify-end gap-1">
+                    <div className="flex items-center justify-end gap-1">
+                      {q.enabled === false && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-2 text-xs"
+                          disabled={props.togglePending}
+                          onClick={() => props.onToggleEnabled(q.id, true)}
+                        >
+                          <Play className="size-3.5" />
+                          恢复
+                        </Button>
+                      )}
                       <Button
                         size="icon"
                         variant="ghost"
@@ -183,6 +201,17 @@ export default function QuestionListRows(props: Props) {
                   </span>
                 </ToolbarGroup>
                 <ToolbarGroup className="ms-auto">
+                  {q.enabled === false && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={props.togglePending}
+                      onClick={() => props.onToggleEnabled(q.id, true)}
+                    >
+                      <Play />
+                      恢复
+                    </Button>
+                  )}
                   <Button size="sm" variant="ghost" onClick={() => props.onEdit(q)}>
                     <Pencil />
                     编辑

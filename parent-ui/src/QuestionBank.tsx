@@ -259,11 +259,14 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
         hasFilters={hasFilters(filter)}
         selected={selected}
         pausedCount={meta.paused}
+        showAll={filter.showAll}
         bankFilter={filter.bank}
         bulkPending={bulkDelete.isPending || bulkPause.isPending}
         deleteBankPending={deleteBank.isPending}
         onPage={setPage}
         onToggle={toggle}
+        onToggleShowAll={() => change('showAll', !filter.showAll)}
+        onToggleEnabled={(id, enabled) => bulkPause.mutate({ ids: [id], enabled })}
         onSelectPage={() => setSelected(list => [...new Set([...list, ...items.map((q: any) => q.id)])])}
         onSelectAll={checked =>
           setSelected(list =>
@@ -289,10 +292,12 @@ export default function QuestionBank({ sessionId }: { sessionId: number }) {
       <QuestionDetailSheet
         current={current}
         items={items}
+        togglePending={bulkPause.isPending}
         onNavigate={setDrawer}
         onClose={() => setDrawer(null)}
         onEdit={startEdit}
         onCopy={q => startEdit(q, true)}
+        onToggleEnabled={q => bulkPause.mutate({ ids: [q.id], enabled: q.enabled === false })}
         onRemove={setRemove}
       />
 

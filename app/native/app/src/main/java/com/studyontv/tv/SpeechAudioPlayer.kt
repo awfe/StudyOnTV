@@ -1,11 +1,13 @@
 package com.studyontv.tv
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.MediaPlayer
+import android.os.Build
 import android.os.Handler
 import org.json.JSONObject
 import java.io.File
@@ -25,10 +27,61 @@ internal object SpeechAudioPlayer {
     @Volatile private var track: AudioTrack? = null
     private var audioFile: File? = null
 
-    // 走媒体流而不是无障碍流，确保华为智慧屏、TCL 等电视经扬声器 / HDMI 正常出声
-    val attributes: AudioAttributes
-        get() = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+    /**
+     * 决定朗读/听力播放所使用的 AudioAttributes.USAGE：
+     * - 平时走 USAGE_MEDIA，确保华为智慧屏、TCL 等电视经扬声器 / HDMI 正常出声；
+     * - 当 MediaPause 因后台播放器无视暂停键而静音 STREAM_MUSIC 时（#196），
+     *   动态切到当前设备有声且未静音的独立音频流，避免连带把答题朗读和听力也静音。
+     */
+    internal fun resolveAudioUsage(
+        musicMuted: Boolean,
+        sdkInt: Int,
+        accessibilityAudible: Boolean,
+        alarmAudible: Boolean,
+        notificationAudible: Boolean
+    ): Int {
+        if (!musicMuted) return AudioAttributes.USAGE_MEDIA
+        if (sdkInt >= 26 && accessibilityAudible) return AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY
+        if (alarmAudible) return AudioAttributes.USAGE_ALARM
+        if (notificationAudible) return AudioAttributes.USAGE_NOTIFICATION
+        return AudioAttributes.USAGE_MEDIA
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isStreamAudible(audio: AudioManager, stream: Int, sdkInt: Int): Boolean = try {
+        val vol = audio.getStreamVolume(stream)
+        val muted = if (sdkInt >= 23) audio.isStreamMute(stream) else vol <= 0
+        vol > 0 && !muted
+    } catch (_: Exception) {
+        false
+    }
+
+    @SuppressLint("InlinedApi")
+    fun attributesFor(context: Context?): AudioAttributes {
+        val usage = if (!MediaPause.levelMuted || context == null) {
+            AudioAttributes.USAGE_MEDIA
+        } else {
+            val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            val sdk = Build.VERSION.SDK_INT
+            if (audio == null) {
+                AudioAttributes.USAGE_MEDIA
+            } else {
+                val chosen = resolveAudioUsage(
+                    musicMuted = true,
+                    sdkInt = sdk,
+                    accessibilityAudible = sdk >= 26 && isStreamAudible(audio, AudioManager.STREAM_ACCESSIBILITY, sdk),
+                    alarmAudible = isStreamAudible(audio, AudioManager.STREAM_ALARM, sdk),
+                    notificationAudible = isStreamAudible(audio, AudioManager.STREAM_NOTIFICATION, sdk)
+                )
+                if (chosen != AudioAttributes.USAGE_MEDIA) {
+                    Diag.info("Speech", "music stream muted by MediaPause, routing speech to usage=$chosen")
+                }
+                chosen
+            }
+        }
+        return AudioAttributes.Builder().setUsage(usage)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+    }
 
     fun stopNow() {
         synchronized(trackLock) {
@@ -40,6 +93,7 @@ internal object SpeechAudioPlayer {
     }
 
     fun playUrl(
+        context: Context,
         url: String,
         request: Int,
         onDone: () -> Unit,
@@ -47,7 +101,7 @@ internal object SpeechAudioPlayer {
     ) {
         try {
             player = MediaPlayer().apply {
-                setAudioAttributes(attributes); setDataSource(url)
+                setAudioAttributes(attributesFor(context)); setDataSource(url)
                 setOnPreparedListener {
                     if (request == SpeechReader.currentGeneration()) {
                         SpeechReader.markSpeaking(true); start()
@@ -108,7 +162,7 @@ internal object SpeechAudioPlayer {
                 if (pcm != null) {
                     main.post {
                         if (SpeechReader.currentGeneration() != request) return@post
-                        playPcm(pcm, request, main,
+                        playPcm(context, pcm, request, main,
                             onStarted = if (index == 0) {
                                 { SpeechReader.notify(true, mode, "ok", language, language, false, "", request) }
                             } else null,
@@ -126,7 +180,7 @@ internal object SpeechAudioPlayer {
                     try {
                         audioFile = file
                         player = MediaPlayer().apply {
-                            setAudioAttributes(attributes); setDataSource(file.absolutePath)
+                            setAudioAttributes(attributesFor(context)); setDataSource(file.absolutePath)
                             setOnCompletionListener { mp ->
                                 mp.release()
                                 file.delete()
@@ -193,6 +247,7 @@ internal object SpeechAudioPlayer {
 
     /** 直接播放 16 位 PCM WAV（DeepSeek 朗读），顺序在 worker 线程执行。 */
     private fun playPcm(
+        context: Context,
         pcm: WavAudio.Pcm,
         request: Int,
         main: Handler,
@@ -209,7 +264,7 @@ internal object SpeechAudioPlayer {
                     .setSampleRate(pcm.sampleRate).setChannelMask(mask).build()
                 val minBytes = AudioTrack.getMinBufferSize(pcm.sampleRate, mask, AudioFormat.ENCODING_PCM_16BIT)
                 val bufferBytes = validatePcmBufferSize(minBytes)
-                val created = AudioTrack(attributes, format, bufferBytes, AudioTrack.MODE_STREAM,
+                val created = AudioTrack(attributesFor(context), format, bufferBytes, AudioTrack.MODE_STREAM,
                     AudioManager.AUDIO_SESSION_ID_GENERATE)
                 try {
                     validateAudioTrackState(created.state)

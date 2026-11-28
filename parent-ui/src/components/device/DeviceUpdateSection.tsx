@@ -150,6 +150,9 @@ export default function DeviceUpdateSection({
     item => item && !item.ok && !String(item.message || '').includes('已是最新版本'),
   );
   const latestVer = updateInfo?.latest || '新版';
+  const isMobileOrMiui =
+    deviceData?.flavor === 'mobile' ||
+    /xiaomi|redmi|poco/i.test(`${deviceData?.manufacturer || ''} ${deviceData?.model || ''}`);
   const apkName =
     deviceData?.flavor === 'tv'
       ? `StudyOnTV-Android-TV-v${latestVer}.apk`
@@ -236,7 +239,9 @@ export default function DeviceUpdateSection({
               description={
                 supportsSilentUpdate
                   ? '后台自动完成安装，装完自动恢复服务。'
-                  : '支持 Web 端一键下载，下载完成后请在设备屏幕上确认安装。'
+                  : isMobileOrMiui
+                    ? '支持 Web 端一键下载，下载完成后请在设备确认安装；小米/澎湃平板若未弹出，请下拉通知栏点击更新提示或开启「后台弹出界面」。覆盖升级后若悬浮窗被系统重置，请重新授予悬浮窗权限。'
+                    : '支持 Web 端一键下载，下载完成后请在设备屏幕上确认安装。'
               }
             >
               {supportsSilentUpdate ? (

@@ -127,6 +127,7 @@ object SpeechReader {
             this.notice = notice
             cachedContext = app
             SpeechAudioPlayer.playUrl(
+                context = app,
                 url = url,
                 request = request,
                 onDone = { notify(true, "audio", "done", "", "", false, "") },
@@ -329,7 +330,7 @@ object SpeechReader {
             notify(false, mode, if (cloudError.isNotEmpty()) "cloud-unavailable" else "language-unavailable", plan.requested, plan.language, true, msg)
             return
         }
-        try { engine.setAudioAttributes(SpeechAudioPlayer.attributes) } catch (_: Exception) { }
+        try { engine.setAudioAttributes(SpeechAudioPlayer.attributesFor(context)) } catch (_: Exception) { }
         try { engine.setSpeechRate(rateOf(currentSettings()).toFloat()) } catch (_: Exception) { }
         currentText = text; currentLanguage = plan.language
         if (plan.degraded) retriedDefault = true
