@@ -111,7 +111,7 @@ class LanServer(
 
         /** 设备令牌（学习页 WebView）仅允许调用学习状态、切换孩子与答题相关接口，禁止改动规则、题库或密码。 */
         internal fun isDeviceRouteAllowed(method: String, path: String): Boolean = when {
-            method == "GET" && path == "/api/state" -> true
+            method == "GET" && (path == "/api/state" || path == "/api/learning/state") -> true
             method == "POST" && path in setOf(
                 "/api/children/switch",
                 "/api/quiz/start",
@@ -444,6 +444,24 @@ class LanServer(
                 .map { (pkg, label) -> JSONObject().put("package", pkg).put("name", label.ifEmpty { pkg }) }
                 .toList()
             json(ctx, 200, JSONObject().put("items", JSONArray(items)))
+        }
+        // 学习页轮询只取页面需要的数据，保留家长面板完整的 /api/state。
+        router.get("/api/learning/state") { ctx ->
+            if (!ctx.deviceAccess) return@get json(ctx, 403, err("forbidden"))
+            val config = store.config()
+            val speech = SpeechReader.settings(store)
+            val learning = DeviceRuntime.learning.status()
+            val page = JSONObject()
+                .put("config", config)
+                .put("learning", learning)
+                .put("children", store.children()).put("activeChild", store.activeChild())
+                .put("speech", JSONObject().put("autoRead", speech.optBoolean("autoRead"))
+                    .put("readScope", speech.optString("readScope", "question")))
+            if (ctx.query["study"] == "1" || !config.optBoolean("supervisionEnabled", true) ||
+                learning.optBoolean("free")) {
+                page.put("study", store.studySummary())
+            }
+            json(ctx, 200, page)
         }
         router.get("/api/state") { ctx ->
             DeviceRuntime.learning.flushUsage()

@@ -176,6 +176,7 @@ class GateOverlay(
             if (needLoad) {
                 view.loadUrl(url)
                 view.postDelayed({ try { view.invalidate(); view.requestLayout() } catch (_: Exception) { } }, 350)
+                if (reused) view.evaluateJavascript("window.SOTV_RESUME&&SOTV_RESUME()", null)
             } else view.evaluateJavascript("window.SOTV_RESUME&&SOTV_RESUME()", null)
             view.requestFocus()
             handler.removeCallbacks(verifyVisibility)
@@ -199,7 +200,10 @@ class GateOverlay(
         handler.removeCallbacks(probePageTask)
         dismissInlineInput(notifyCancel = notifyCancel)
         val host = container ?: return
-        if (attached) try { manager.removeViewImmediate(host) } catch (_: Exception) { }
+        if (attached) {
+            try { web?.evaluateJavascript("window.SOTV_PAUSE&&SOTV_PAUSE()", null) } catch (_: RuntimeException) { }
+            try { manager.removeViewImmediate(host) } catch (_: Exception) { }
+        }
         if (attached && !InputSupport.active) MediaPause.release(context)
         if (attached) SpeechReader.stop()
         attached = false

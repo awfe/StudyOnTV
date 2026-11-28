@@ -165,7 +165,10 @@ open class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
-        if (!webReleased) web?.onPause()
+        if (!webReleased) {
+            web?.evaluateJavascript("window.SOTV_PAUSE&&SOTV_PAUSE()", null)
+            web?.onPause()
+        }
     }
 
     override fun onResume() {

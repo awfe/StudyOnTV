@@ -9,6 +9,7 @@
     review: null, draft: null, unlockPending: false, unlockPendingAt: 0,
     cardIndex: 0, cardRevealed: false, lastStartOpts: null, loaded: false
   };
+  var pagePaused = false, pollGeneration = 0, stateLoads = 0, pendingPosts = 0;
   var toastTimer, nextTimer, resumeTimer, taps = 0, lastTap = 0, upTaps = 0, lastUpTap = 0;
   function clearResumeTimer() { window.clearTimeout(resumeTimer); resumeTimer = null; }
   var QUESTION_INPUT_GUARD_MS = 300;
@@ -185,7 +186,12 @@
   }
   function request(path, body, callback) {
     var xhr = new XMLHttpRequest(), finished = false;
-    function done(error, value) { if (finished) return; finished = true; callback(error, value); }
+    function done(error, value) {
+      if (finished) return;
+      finished = true;
+      if (body) pendingPosts--;
+      callback(error, value);
+    }
     xhr.open(body ? 'POST' : 'GET', path, true);
     xhr.timeout = 10000;
     if (body) xhr.setRequestHeader('Content-Type', 'application/json');
@@ -199,6 +205,7 @@
     };
     xhr.onerror = function () { done('连接设备失败'); };
     xhr.ontimeout = function () { done('连接超时，请重试'); };
+    if (body) { pendingPosts++; pollGeneration++; }
     xhr.send(body ? JSON.stringify(body) : null);
   }
   function toast(value) {
@@ -243,13 +250,24 @@
     var m = Math.ceil(seconds / 60);
     return m >= 60 ? '还剩 ' + Math.floor(m / 60) + ' 小时' + (m % 60 ? ' ' + (m % 60) + ' 分' : '') : '还剩 ' + m + ' 分钟';
   }
-  function loadState(callback) {
-    request('/api/state', null, function (error, result) {
+  function pollAllowed() {
+    return !pagePaused && !document.hidden && state.screen !== 'pair' && state.loaded &&
+      !pendingPosts && !(state.busy && !state.feedback) && !isPinModalOpen();
+  }
+  function loadState(callback, polling) {
+    if (!polling) pollGeneration++;
+    var generation = pollGeneration;
+    var path = polling ? '/api/learning/state' + (state.screen === 'hub' ? '?study=1' : '') : '/api/state';
+    stateLoads++;
+    request(path, null, function (error, result) {
+      stateLoads--;
+      // 后台读请求不能覆盖切孩子、答题、页面恢复等显式操作的状态。
+      if (polling && (generation !== pollGeneration || !pollAllowed())) return;
       if (!error) {
         state.config = result.config || {};
         state.learning = result.learning || {};
         state.speech = result.speech || {};
-        state.study = result.study || {};
+        if (result.study || !polling) state.study = result.study || {};
         // 多孩子（#132）：孩子列表和当前是谁由设备端算好，页面只负责显示 / 切换
         state.children = result.children || [];
         state.activeChild = result.activeChild || '';
@@ -1788,10 +1806,10 @@
     try { var cached = nativeCall('updateInfo'); if (cached) window.SOTV_UPDATE(JSON.parse(cached)); } catch (e) {}
     route();
     window.setInterval(function () {
-      $('clock').textContent = new Date().toTimeString().slice(0, 5);
-      if (state.screen === 'pair') return;
-      // 题目提交中或正在输入切换密码：等操作完成再轮询，否则可能把状态重置掉
-      if (!state.loaded || (state.busy && !state.feedback) || isPinModalOpen()) return;
+      if (pagePaused || document.hidden) return;
+      var clock = $('clock'), time = new Date().toTimeString().slice(0, 5);
+      if (clock.textContent !== time) clock.textContent = time;
+      if (stateLoads || !pollAllowed()) return;
       var version = state.config.version, quizGeneration = state.learning.quizGeneration || 0, wasFree = !!state.learning.free, wasPure = isPureStudyMode(), prevOvKey = overrideKey(state.learning);
       loadState(function (error) {
         if (error) return;
@@ -1849,7 +1867,7 @@
         }
         if (state.screen === 'quiz' && !isHubAvailable() && state.learning.reason && ['quota', 'rounds', 'schedule', 'rest', 'feedback'].indexOf(state.learning.reason) >= 0 && state.config.playMode !== 'practice') lock(state.learning.reason);
         else if (version !== state.config.version && state.screen === 'quiz' && !isHubAvailable()) start();
-      });
+      }, true);
     }, 2000);
   }
   window.SOTV_INPUT_CANCEL = function () {
@@ -1933,7 +1951,12 @@
     },
     state: state
   };
-  window.SOTV_RESUME = function () { if (document.readyState === 'complete' && !state.busy && state.screen !== 'pair') resumeSync(); };
+  window.SOTV_PAUSE = function () { pagePaused = true; pollGeneration++; };
+  window.SOTV_RESUME = function () {
+    pagePaused = false;
+    if (document.readyState === 'complete' && !state.busy && state.screen !== 'pair') resumeSync();
+  };
+  document.addEventListener('visibilitychange', function () { if (document.hidden) pollGeneration++; });
   window.addEventListener('hashchange', route);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
