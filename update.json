@@ -1,21 +1,21 @@
 {
-  "version": "0.5.10",
-  "versionCode": 57,
+  "version": "0.5.11",
+  "versionCode": 58,
   "force": false,
-  "notes": "- **零敏感权限、仅 ~0.7 MB**：独立于孩子端打包，仅申请基础网络权限（`INTERNET` / `ACCESS_NETWORK_STATE`），不触发手机安全软件误报。\n- **局域网自动发现 & 一键进后台**：自动扫描家里运行「题了个题」的电视和平板，按设备 ID 自动跟踪路由器重启后的 IP 变化，点一下直接打开 `/admin/` 家长管理面板（支持文件选择上传与备份导出）。\n- **无线 ADB（`TCP:5555`）一键装电视 & 修权限**：内置纯 Kotlin 零依赖无线 ADB 客户端与常见电视品牌（小米/红米、TCL/雷鸟、海信/Vidda、创维/酷开、索尼、盒子/投影、平板）3 步速查卡；支持免 U 盘远程推送安装包，自动配置悬浮窗、应用使用情况、应用内安装、非破坏性合并无障碍服务、`WRITE_SECURE_SETTINGS`、通知与省电白名单。\n\n- **遥控页新增「临时解锁到本次关机」**（#199，by @awfe）：待机、熄屏与应用重建仍保持解锁，真正关机/断电重启后自动恢复原规则；同步适配家长面板、学习页与 Telegram 状态显示。\n- **网络校时后保留已结算观看额度**（#200，by @awfe）：设备冷启动读到未来系统日期后，网络校时回正时保留本次已消耗额度与完成组数，并防止退回错误系统日期时重复发额度；同步修正时区与夏令时日界统计。\n- **降低 TV 学习页空闲轮询开销**（#198，by @awfe）：新增轻量化 `/api/learning/state` 接口，页面不可见/暂停时停止后台轮询，审核合入时同步补修悬浮窗复用切路由恢复轮询的边界问题。\n- **修复小米电视 Android 14 等缺失确认页导致的在线更新一闪而过**（#203 / closes #201，by @Seyamalam）：提交会话安装前先探测系统 `CONFIRM_INSTALL` 确认页，缺失时直接走 `ACTION_VIEW` 避免 `force-stop` 清空临时 URI 授权。\n- **修复听力题编辑弹窗「单题语速」空值导致的页面异常**（#195，by @chenlingmin）。\n\n- 新增仓库开发守则 `AGENTS.md`、统一 UI 设计规范 `docs/STYLEGUIDE.md`、避坑参考文档与全仓静态守卫 `repo-guard.mjs`（强制 ES5、禁非安全上下文 `randomUUID()`、Token 规范、单文件行数上限、家长端权限红线）。\n- 完成 `parent-ui`、学习页 `app/web` 与 Android 核心模块（`LocalStore`、`LearningEngine`、`GateService`、`LanServer` 等）全仓领域化拆分，`parent-ui` 主包体积减少约 70 KB，发版流水线新增版本号/Tag 强校验与 `SHA256SUMS.txt` 校验文件。",
-  "publishedAt": "2026-11-28T04:25:04.009Z",
+  "notes": "- **锁屏静音期间朗读与听力正常出声（#196）**：后台视频无视暂停键被强静媒体流时，答题自动朗读、云端语音与听力音频会动态改走独立音频流，不再被连带静音；平时仍走媒体流，保持华为智慧屏 / TCL 等电视 HDMI 正常出声。\n- **电视解锁后音频恢复更稳（#197）**：解除静音后按当前实时音量档位幂等刷新一次音频通路，解决 Sony BRAVIA Android 12 等机型解锁后仍无声的问题；在限制应用改音量的定制固件上遇到 `SecurityException` 时自动熔断静音降级，不再循环报错。\n- **小米 / 澎湃平板在线更新通知兜底（#202）**：Web 端点击「立即安装」下载完成后，同步发出高优先级「新版本已下载就绪」点击安装通知，绕过 MIUI/HyperOS 后台拉起拦截（成功弹出安装页时自动消除通知），并在家长面板补充权限提示。\n- **已暂停题目一键查看与恢复（#205）**：题库列表工具栏「查看已暂停（N）」支持一键切换展示，桌面行、手机卡片与题目详情抽屉均可单题一键恢复；全部题目被暂停时也会明确提示并给出恢复入口。\n- **整机备份恢复媒体自愈**：恢复或局域网同步时自动兼容旧备份较大内联配图，对损坏或失效的配图/音频地址仅清理该字段而不再导致整份备份恢复失败。",
+  "publishedAt": "2026-11-28T05:01:14.532Z",
   "assets": {
     "tv": {
-      "name": "StudyOnTV-Android-TV-v0.5.10.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.10/StudyOnTV-Android-TV-v0.5.10.apk",
-      "sha256": "34e1d514514884c6332074340d097f2e52791e3a51d8f7aa0111791c857156b7",
-      "size": 3618781
+      "name": "StudyOnTV-Android-TV-v0.5.11.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.11/StudyOnTV-Android-TV-v0.5.11.apk",
+      "sha256": "75412f4258941247f5f75ae4cd0e59e847834f6ab83370f3ee3280616212a23a",
+      "size": 3621535
     },
     "mobile": {
-      "name": "StudyOnTV-Mobile-v0.5.10.apk",
-      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.10/StudyOnTV-Mobile-v0.5.10.apk",
-      "sha256": "1eeb3fa3360b69bcf96e1f315033c64bc9d241f80df524b595bfaa2bff1ad909",
-      "size": 3620901
+      "name": "StudyOnTV-Mobile-v0.5.11.apk",
+      "url": "https://github.com/chadyi/StudyOnTV/releases/download/v0.5.11/StudyOnTV-Mobile-v0.5.11.apk",
+      "sha256": "7fdf90e5389b98d1b88cb541954b426e74cbe8802daaea3caffd54a447a454d7",
+      "size": 3623560
     }
   }
 }
